@@ -1,26 +1,67 @@
 package com.example.myiptvplayer
 
 import android.content.Context
+import com.example.myiptvplayer.data.Playlist
+import org.json.JSONArray
+import org.json.JSONObject
 
 object Prefs {
     private const val PREFS_NAME = "iptv_prefs"
-    private const val KEY_SOURCE_TYPE = "source_type"
-    private const val KEY_SOURCE_VALUE = "source_value"
+    private const val KEY_PLAYLISTS = "playlists"
+    private const val KEY_SELECTED_PLAYLIST = "selected_playlist_id"
     private const val KEY_LAST_CHANNEL = "last_channel_id"
 
-    fun savePlaylist(context: Context, type: String, value: String) {
+    fun savePlaylists(context: Context, playlists: List<Playlist>) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString(KEY_SOURCE_TYPE, type)
-            .putString(KEY_SOURCE_VALUE, value)
-            .apply()
+        val jsonArray = JSONArray()
+        playlists.forEach { playlist ->
+            val jsonObject = JSONObject().apply {
+                put("id", playlist.id)
+                put("name", playlist.name)
+                put("sourceType", playlist.sourceType)
+                put("sourceValue", playlist.sourceValue)
+                put("order", playlist.order)
+                put("createdAt", playlist.createdAt)
+            }
+            jsonArray.put(jsonObject)
+        }
+        prefs.edit().putString(KEY_PLAYLISTS, jsonArray.toString()).apply()
     }
 
-    fun getPlaylist(context: Context): Pair<String, String>? {
+    fun getPlaylists(context: Context): List<Playlist> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val type = prefs.getString(KEY_SOURCE_TYPE, null)
-        val value = prefs.getString(KEY_SOURCE_VALUE, null)
-        return if (type != null && value != null) type to value else null
+        val jsonString = prefs.getString(KEY_PLAYLISTS, null) ?: return emptyList()
+        
+        val playlists = mutableListOf<Playlist>()
+        try {
+            val jsonArray = JSONArray(jsonString)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                playlists.add(
+                    Playlist(
+                        id = obj.getString("id"),
+                        name = obj.getString("name"),
+                        sourceType = obj.getString("sourceType"),
+                        sourceValue = obj.getString("sourceValue"),
+                        order = obj.optInt("order", 0),
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MI_IPTV", "Error parsing playlists", e)
+        }
+        return playlists.sortedBy { it.order }
+    }
+
+    fun saveSelectedPlaylist(context: Context, playlistId: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_SELECTED_PLAYLIST, playlistId).apply()
+    }
+
+    fun getSelectedPlaylistId(context: Context): String? {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_SELECTED_PLAYLIST, null)
     }
 
     fun saveLastChannel(context: Context, channelId: String) {
@@ -31,5 +72,10 @@ object Prefs {
     fun getLastChannel(context: Context): String? {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_LAST_CHANNEL, null)
+    }
+
+    fun clearAll(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().clear().apply()
     }
 }

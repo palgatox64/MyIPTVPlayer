@@ -62,7 +62,13 @@ fun PlayerScreen(
     channels: List<Channel>,
     currentChannel: Channel?,
     onChannelSelected: (Channel) -> Unit,
-    onResetPlaylist: () -> Unit
+    onResetPlaylist: () -> Unit,
+    // Agregar estos parámetros
+    playlists: List<com.example.myiptvplayer.data.Playlist>,
+    selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
+    onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
+    onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+    onAddPlaylist: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -202,7 +208,12 @@ fun PlayerScreen(
                     if (showSettings) {
                         SettingsView(
                             onBack = { isSettingsOpen = false },
-                            onReset = onResetPlaylist
+                            onReset = onResetPlaylist,
+                            playlists = playlists,
+                            selectedPlaylist = selectedPlaylist,
+                            onPlaylistSelected = onPlaylistSelected,
+                            onDeletePlaylist = onDeletePlaylist,
+                            onAddPlaylist = onAddPlaylist
                         )
                     } else {
                         ChannelsView(
@@ -313,7 +324,12 @@ fun ChannelsView(
 @Composable
 fun SettingsView(
     onBack: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    playlists: List<com.example.myiptvplayer.data.Playlist>,
+    selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
+    onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
+    onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+    onAddPlaylist: () -> Unit
 ) {
     val backButtonFocus = remember { FocusRequester() }
 
@@ -325,9 +341,9 @@ fun SettingsView(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.Start
     ) {
-        Text("Opciones", style = androidx.tv.material3.MaterialTheme.typography.headlineMedium, color = Color.White)
+        Text("Listas de Reproducción", style = androidx.tv.material3.MaterialTheme.typography.headlineMedium, color = Color.White)
 
-        Spacer(modifier = Modifier.height(30.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Button(
             onClick = onBack,
@@ -342,21 +358,73 @@ fun SettingsView(
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
+            onClick = onAddPlaylist,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.colors(containerColor = Color(0xFF00BFA5), contentColor = Color.White)
+        ) {
+            Text("+ Agregar Lista")
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(playlists, key = { it.id }) { playlist ->
+                val isSelected = playlist == selectedPlaylist
+                var isFocused by remember { mutableStateOf(false) }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .focusable()
+                        .clickable { onPlaylistSelected(playlist) }
+                        .background(
+                            color = when {
+                                isSelected -> Color(0xFF00BFA5).copy(alpha = 0.7f)
+                                isFocused -> Color.White.copy(alpha = 0.2f)
+                                else -> Color.Transparent
+                            },
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                        )
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = playlist.name,
+                            color = Color.White,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Text(
+                            text = if (playlist.sourceType == "url") "URL" else "Archivo",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
+                    }
+                    
+                    Button(
+                        onClick = { onDeletePlaylist(playlist) },
+                        colors = ButtonDefaults.colors(containerColor = Color(0xFFB00020), contentColor = Color.White),
+                        modifier = Modifier.size(40.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Default.DeleteForever, contentDescription = "Eliminar", modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
             onClick = onReset,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.colors(containerColor = Color(0xFFB00020), contentColor = Color.White)
         ) {
             Icon(Icons.Default.DeleteForever, contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))
-            Text("Eliminar Lista / Cambiar")
+            Text("Eliminar Todas las Listas")
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            "Al eliminar la lista, volverás a la pantalla de configuración inicial.",
-            color = Color.Gray,
-            fontSize = 12.sp
-        )
     }
 }

@@ -71,6 +71,8 @@ fun AppNavigation() {
     val channels by viewModel.channels.collectAsState()
     val currentChannel by viewModel.selectedChannel.collectAsState()
     val isConfigured by viewModel.isConfigured.collectAsState()
+    val playlists by viewModel.playlists.collectAsState()
+    val selectedPlaylist by viewModel.selectedPlaylist.collectAsState()
 
     LaunchedEffect(isConfigured) {
         if (isConfigured == true) {
@@ -91,8 +93,8 @@ fun AppNavigation() {
         composable("config") {
             if (isConfigured == false) {
                 ConfigScreen(
-                    onUrlSelected = { url -> viewModel.setPlaylistFromUrl(url) },
-                    onFileSelected = { uri -> viewModel.setPlaylistFromFile(uri) }
+                    onUrlSelected = { name, url -> viewModel.addPlaylistFromUrl(name, url) },
+                    onFileSelected = { name, uri -> viewModel.addPlaylistFromFile(name, uri) }
                 )
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -106,7 +108,14 @@ fun AppNavigation() {
                 channels = channels,
                 currentChannel = currentChannel,
                 onChannelSelected = { viewModel.playChannel(it) },
-                onResetPlaylist = { viewModel.resetConfiguration() }
+                onResetPlaylist = { viewModel.resetConfiguration() },
+                playlists = playlists,
+                selectedPlaylist = selectedPlaylist,
+                onPlaylistSelected = { viewModel.selectPlaylist(it) },
+                onDeletePlaylist = { viewModel.deletePlaylist(it) },
+                onAddPlaylist = {
+                    navController.navigate("config")
+                }
             )
         }
     }
@@ -115,27 +124,44 @@ fun AppNavigation() {
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun ConfigScreen(
-    onUrlSelected: (String) -> Unit,
-    onFileSelected: (Uri) -> Unit
+    onUrlSelected: (String, String) -> Unit,
+    onFileSelected: (String, Uri) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    var nameInput by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        if (uri != null) {
+        if (uri != null && nameInput.isNotEmpty()) {
             isLoading = true
-            onFileSelected(uri)
+            onFileSelected(nameInput, uri)
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(40.dp)) {
-        androidx.tv.material3.Text("Bienvenido a Mi IPTV", style = androidx.tv.material3.MaterialTheme.typography.headlineLarge)
-        androidx.tv.material3.Text("Configura tu lista por primera vez", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        androidx.tv.material3.Text("Agregar Lista IPTV", style = androidx.tv.material3.MaterialTheme.typography.headlineLarge)
+        androidx.tv.material3.Text("Dale un nombre a tu lista", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
 
         Spacer(modifier = Modifier.height(30.dp))
+
+        OutlinedTextField(
+            value = nameInput,
+            onValueChange = { nameInput = it },
+            label = { Text("Nombre de la lista (ej: Deportes)") },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(color = Color.White),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color.Cyan,
+                unfocusedBorderColor = Color.Gray,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+            )
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -153,16 +179,22 @@ fun ConfigScreen(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Button(onClick = {
-                if (urlInput.isNotEmpty()) {
+                if (urlInput.isNotEmpty() && nameInput.isNotEmpty()) {
                     isLoading = true
-                    onUrlSelected(urlInput)
+                    onUrlSelected(nameInput, urlInput)
                 }
             }) { Text("Cargar URL") }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Button(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }) {
+        Button(
+            onClick = {
+                if (nameInput.isNotEmpty()) {
+                    filePickerLauncher.launch(arrayOf("*/*"))
+                }
+            }
+        ) {
             Row {
                 Icon(Icons.Default.FolderOpen, null)
                 Spacer(modifier = Modifier.width(8.dp))

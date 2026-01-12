@@ -9,11 +9,3 @@ data class Channel(
     val streamUrl: String,   // El enlace largo http...
     val playlistId: Int = 0  // Lo usaremos después para la base de datos
 )
-
-// Modelo de una Lista de Reproducción (Playlist)
-data class Playlist(
-    val id: Int = 0,
-    val name: String,
-    val sourceUrl: String? = null,
-    val localPath: String? = null
-)
