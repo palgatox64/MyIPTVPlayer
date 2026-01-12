@@ -43,7 +43,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -93,16 +95,56 @@ fun PlayerScreen(
     }
 
     val exoPlayer = remember {
-        val trackSelector = DefaultTrackSelector(context)
+        val trackSelector = DefaultTrackSelector(context).apply {
+            setParameters(
+                buildUponParameters()
+                    // CAMBIAR A FALSE para emulador
+                    .setTunnelingEnabled(true) // ← Cambia esto
+            )
+        }
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15_000,  // Min buffer (15s en vez de 30s)
+                60_000,  // Max buffer (1 min en vez de 2 min)
+                1_500,   // Buffer para iniciar (1.5s en vez de 2.5s)
+                3_000    // Buffer para reanudar (3s en vez de 5s)
+            )
+            .build()
+
         ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
             .build().apply {
                 playWhenReady = true
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+
+                // AGREGAR: Priorizar sincronización
+                setHandleAudioBecomingNoisy(true)
+
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_BUFFERING) isBuffering = true
                         else if (playbackState == Player.STATE_READY) isBuffering = false
+                    }
+
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        // MEJORAR: Resetear completamente en caso de error
+                        android.util.Log.e("MI_IPTV", "Error: ${error.message}", error)
+                        stop()
+                        clearMediaItems()
+                        prepare()
+                    }
+                })
+
+                addAnalyticsListener(object : AnalyticsListener {
+                    override fun onDroppedVideoFrames(
+                        eventTime: AnalyticsListener.EventTime,
+                        droppedFrames: Int,
+                        elapsedMs: Long
+                    ) {
+                        if (droppedFrames > 50) { // Si hay muchos frames perdidos
+                            android.util.Log.w("MI_IPTV", "Frames perdidos: $droppedFrames")
+                        }
                     }
                 })
             }
@@ -129,10 +171,25 @@ fun PlayerScreen(
                 isBuffering = true
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
+
+                // AGREGAR: Pequeño delay para limpiar completamente
+                delay(100)
+
                 if (currentChannel.streamUrl.isNotBlank()) {
-                    val mediaItem = MediaItem.fromUri(currentChannel.streamUrl)
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(currentChannel.streamUrl)
+                        .setLiveConfiguration(
+                            MediaItem.LiveConfiguration.Builder()
+                                .setMaxPlaybackSpeed(1.02f) // Permitir acelerar ligeramente para alcanzar el live
+                                .build()
+                        )
+                        .build()
+
                     exoPlayer.setMediaItem(mediaItem)
                     exoPlayer.prepare()
+
+                    // NUEVO: Forzar play después de preparar
+                    exoPlayer.playWhenReady = true
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MI_IPTV", "Error loading video", e)
