@@ -21,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -32,7 +31,6 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import com.example.myiptvplayer.ui.theme.MyIPTVPlayerTheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalTvMaterial3Api::class)
@@ -68,22 +66,26 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val viewModel: MainViewModel = viewModel()
 
-    val channels by viewModel.channels.collectAsState()
+    // Recolectamos flujos del ViewModel
+    val channels by viewModel.channels.collectAsState(initial = emptyList())
     val currentChannel by viewModel.selectedChannel.collectAsState()
     val isConfigured by viewModel.isConfigured.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     val selectedPlaylist by viewModel.selectedPlaylist.collectAsState()
 
+    // Nuevos flujos para grupos
+    val groups by viewModel.groups.collectAsState()
+    val selectedGroup by viewModel.selectedGroup.collectAsState()
+
+    // Lógica de Redirección Inicial (Solo si la app recién abre)
     LaunchedEffect(isConfigured) {
-        if (isConfigured == true) {
-            navController.navigate("player") {
-                popUpTo("config") { inclusive = true }
-            }
+        // Solo navegamos automáticamente si NO estamos ya en Config ni en Player (arranque)
+        // O si se borró la configuración
+        if (isConfigured == true && navController.currentDestination?.route != "player" && navController.currentDestination?.route != "config") {
+            navController.navigate("player") { popUpTo("config") { inclusive = true } }
         } else if (isConfigured == false) {
             if (navController.currentDestination?.route == "player") {
-                navController.navigate("config") {
-                    popUpTo("player") { inclusive = true }
-                }
+                navController.navigate("config") { popUpTo("player") { inclusive = true } }
             }
         }
     }
@@ -91,15 +93,26 @@ fun AppNavigation() {
     NavHost(navController = navController, startDestination = "config") {
 
         composable("config") {
-            if (isConfigured == false) {
-                ConfigScreen(
-                    onUrlSelected = { name, url -> viewModel.addPlaylistFromUrl(name, url) },
-                    onFileSelected = { name, uri -> viewModel.addPlaylistFromFile(name, uri) }
-                )
-            } else {
+            // CORRECCIÓN: Si isConfigured es NULL, cargamos. Si es TRUE o FALSE, mostramos la pantalla.
+            // Esto permite entrar a "config" para agregar listas aunque ya existan otras.
+            if (isConfigured == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     androidx.tv.material3.Text("Cargando perfil...", color = Color.White)
                 }
+            } else {
+                ConfigScreen(
+                    onUrlSelected = { name, url ->
+                        viewModel.addPlaylistFromUrl(name, url) {
+                            // Al terminar de agregar, volvemos al player
+                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                        }
+                    },
+                    onFileSelected = { name, uri ->
+                        viewModel.addPlaylistFromFile(name, uri) {
+                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                        }
+                    }
+                )
             }
         }
 
@@ -113,9 +126,11 @@ fun AppNavigation() {
                 selectedPlaylist = selectedPlaylist,
                 onPlaylistSelected = { viewModel.selectPlaylist(it) },
                 onDeletePlaylist = { viewModel.deletePlaylist(it) },
-                onAddPlaylist = {
-                    navController.navigate("config")
-                }
+                onAddPlaylist = { navController.navigate("config") },
+                // Pasamos datos de grupos
+                groups = groups,
+                selectedGroup = selectedGroup,
+                onGroupSelected = { viewModel.selectGroup(it) }
             )
         }
     }
@@ -143,14 +158,14 @@ fun ConfigScreen(
 
     Column(modifier = Modifier.fillMaxSize().padding(40.dp)) {
         androidx.tv.material3.Text("Agregar Lista IPTV", style = androidx.tv.material3.MaterialTheme.typography.headlineLarge)
-        androidx.tv.material3.Text("Dale un nombre a tu lista", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        androidx.tv.material3.Text("Dale un nombre a tu lista (ej: Deportes, Cine)", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
 
         Spacer(modifier = Modifier.height(30.dp))
 
         OutlinedTextField(
             value = nameInput,
             onValueChange = { nameInput = it },
-            label = { Text("Nombre de la lista (ej: Deportes)") },
+            label = { Text("Nombre de la lista") },
             modifier = Modifier.fillMaxWidth(),
             textStyle = TextStyle(color = Color.White),
             colors = OutlinedTextFieldDefaults.colors(

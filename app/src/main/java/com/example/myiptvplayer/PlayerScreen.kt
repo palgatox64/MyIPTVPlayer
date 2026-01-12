@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -28,7 +29,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
@@ -63,27 +63,25 @@ fun PlayerScreen(
     currentChannel: Channel?,
     onChannelSelected: (Channel) -> Unit,
     onResetPlaylist: () -> Unit,
-    // Agregar estos parámetros
     playlists: List<com.example.myiptvplayer.data.Playlist>,
     selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
     onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onAddPlaylist: () -> Unit
+    onAddPlaylist: () -> Unit,
+    // Parámetros de Grupos
+    groups: List<String>,
+    selectedGroup: String,
+    onGroupSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
 
     var isMenuVisible by remember { mutableStateOf(true) }
     var isSettingsOpen by remember { mutableStateOf(false) }
-
     var isBuffering by remember { mutableStateOf(true) }
 
     val videoFocusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
-
-    val settingsButtonFocus = remember { FocusRequester() }
-    val channelsListFocus = remember { FocusRequester() }
 
     BackHandler(enabled = isMenuVisible) {
         if (isSettingsOpen) {
@@ -191,7 +189,7 @@ fun PlayerScreen(
             Row(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(420.dp)
+                    .width(420.dp) // Un poco más ancho para los grupos
                     .background(Brush.horizontalGradient(colors = listOf(Color.Black.copy(alpha = 0.98f), Color.Transparent)))
                     .padding(20.dp)
                     .onPreviewKeyEvent { keyEvent ->
@@ -221,7 +219,10 @@ fun PlayerScreen(
                             currentChannel = currentChannel,
                             listState = listState,
                             onChannelSelected = onChannelSelected,
-                            onOpenSettings = { isSettingsOpen = true }
+                            onOpenSettings = { isSettingsOpen = true },
+                            groups = groups,
+                            selectedGroup = selectedGroup,
+                            onGroupSelected = onGroupSelected
                         )
                     }
                 }
@@ -237,7 +238,10 @@ fun ChannelsView(
     currentChannel: Channel?,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onChannelSelected: (Channel) -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    groups: List<String>,
+    selectedGroup: String,
+    onGroupSelected: (String) -> Unit
 ) {
     val headerFocus = remember { FocusRequester() }
 
@@ -255,7 +259,7 @@ fun ChannelsView(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp)
+                .padding(bottom = 10.dp)
                 .focusRequester(headerFocus)
                 .clickable { onOpenSettings() }
                 .focusable()
@@ -266,6 +270,38 @@ fun ChannelsView(
             Text("Configuración", color = Color.LightGray, fontWeight = FontWeight.Bold)
         }
 
+        // --- BARRA DE GRUPOS ---
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(groups) { group ->
+                val isSelected = group == selectedGroup
+                var isFocused by remember { mutableStateOf(false) }
+
+                Text(
+                    text = group,
+                    color = if (isSelected || isFocused) Color.White else Color.Gray,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .focusable()
+                        .clickable { onGroupSelected(group) }
+                        .background(
+                            if (isSelected) Color(0xFF00BFA5).copy(alpha = 0.8f)
+                            else if (isFocused) Color.White.copy(alpha = 0.2f)
+                            else Color.Transparent,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        // --- LISTA DE CANALES ---
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize()
@@ -320,6 +356,7 @@ fun ChannelsView(
     }
 }
 
+// SettingsView se mantiene igual que en tu código anterior...
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsView(
@@ -402,7 +439,7 @@ fun SettingsView(
                             fontSize = 12.sp
                         )
                     }
-                    
+
                     Button(
                         onClick = { onDeletePlaylist(playlist) },
                         colors = ButtonDefaults.colors(containerColor = Color(0xFFB00020), contentColor = Color.White),
