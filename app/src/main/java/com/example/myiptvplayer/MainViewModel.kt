@@ -23,21 +23,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedPlaylist = MutableStateFlow<Playlist?>(null)
     val selectedPlaylist = _selectedPlaylist.asStateFlow()
 
-    // --- LÓGICA DE GRUPOS ---
-    // 1. Guardamos TODOS los canales de la lista actual
     private val _allChannels = MutableStateFlow<List<Channel>>(emptyList())
 
-    // 2. Guardamos el grupo seleccionado actualmente ("Todas", "Nacionales", etc.)
-    private val _selectedGroup = MutableStateFlow("Todas")
+    // Inicializamos vacío
+    private val _selectedGroup = MutableStateFlow("")
     val selectedGroup = _selectedGroup.asStateFlow()
 
-    // 3. Calculamos la lista de grupos disponibles dinámicamente
-    private val _groups = MutableStateFlow<List<String>>(listOf("Todas"))
+    private val _groups = MutableStateFlow<List<String>>(emptyList())
     val groups = _groups.asStateFlow()
 
-    // 4. La lista pública 'channels' ahora es el resultado de filtrar '_allChannels' por '_selectedGroup'
-    val channels = combine(_allChannels, _selectedGroup) { all, group ->
-        if (group == "Todas") all else all.filter { it.group == group }
+    // Lógica de filtrado: Ahora será puramente por Playlist
+    val channels = combine(_allChannels, _selectedGroup, _playlists) { all, group, playlists ->
+        val isPlaylistName = playlists.any { it.name == group }
+
+        when {
+            group.isEmpty() -> emptyList()
+            // Si el nombre coincide con una Playlist, mostramos todo el contenido de esa lista
+            isPlaylistName -> all.filter { it.playlistName == group }
+            // Mantenemos la lógica de grupo por seguridad, aunque ya no la mostremos en la barra
+            else -> all.filter { it.group == group }
+        }
     }
 
     private val _selectedChannel = MutableStateFlow<Channel?>(null)
@@ -56,40 +61,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _playlists.value = savedPlaylists
 
             if (savedPlaylists.isNotEmpty()) {
-                val selectedId = Prefs.getSelectedPlaylistId(context)
-                val playlistToLoad = savedPlaylists.find { it.id == selectedId } ?: savedPlaylists.first()
-                loadPlaylist(playlistToLoad)
                 _isConfigured.value = true
+                loadAllChannels(savedPlaylists)
             } else {
                 _isConfigured.value = false
             }
         }
     }
 
-    private suspend fun loadPlaylist(playlist: Playlist) {
-        val loadedChannels = if (playlist.sourceType == "url") {
-            PlaylistRepository.loadFromUrl(playlist.sourceValue)
-        } else {
-            PlaylistRepository.loadFromFile(context, Uri.parse(playlist.sourceValue))
+    private suspend fun loadAllChannels(playlists: List<Playlist>) {
+        val totalChannels = mutableListOf<Channel>()
+
+        playlists.forEach { playlist ->
+            val loaded = try {
+                if (playlist.sourceType == "url") {
+                    PlaylistRepository.loadFromUrl(playlist.sourceValue)
+                } else {
+                    PlaylistRepository.loadFromFile(context, Uri.parse(playlist.sourceValue))
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val taggedChannels = loaded.map { it.copy(playlistName = playlist.name) }
+            totalChannels.addAll(taggedChannels)
         }
 
-        if (loadedChannels.isNotEmpty()) {
-            _selectedPlaylist.value = playlist
+        if (totalChannels.isNotEmpty()) {
+            _allChannels.value = totalChannels
 
-            // Actualizamos la lista maestra y los grupos
-            _allChannels.value = loadedChannels
+            // CAMBIO CLAVE: Solo usamos los nombres de las Playlists como categorías.
+            // Ignoramos 'group-title' internos para no ensuciar la barra.
+            val playlistNames = playlists.map { it.name }.sorted()
 
-            // Extraer grupos únicos y ordenarlos
-            val extractedGroups = loadedChannels.mapNotNull { it.group }.distinct().sorted()
-            _groups.value = listOf("Todas") + extractedGroups
+            _groups.value = playlistNames
 
-            // Resetear filtro a "Todas" al cambiar de lista
-            _selectedGroup.value = "Todas"
-
-            Prefs.saveSelectedPlaylist(context, playlist.id)
+            // Seleccionar la primera lista por defecto si la actual no es válida
+            if (_selectedGroup.value !in playlistNames && playlistNames.isNotEmpty()) {
+                _selectedGroup.value = playlistNames.first()
+            }
 
             val lastId = Prefs.getLastChannel(context)
-            _selectedChannel.value = loadedChannels.find { it.id == lastId } ?: loadedChannels.first()
+            val foundLast = totalChannels.find { it.id == lastId }
+            if (foundLast != null) {
+                _selectedChannel.value = foundLast
+            } else if (_selectedChannel.value == null) {
+                _selectedChannel.value = totalChannels.first()
+            }
+        } else {
+            _allChannels.value = emptyList()
         }
     }
 
@@ -97,7 +116,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedGroup.value = group
     }
 
-    // Callback onSuccess añadido para saber cuándo navegar
     fun addPlaylistFromUrl(name: String, url: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
             val list = PlaylistRepository.loadFromUrl(url)
@@ -108,8 +126,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     sourceValue = url,
                     order = _playlists.value.size
                 )
-                saveAndLoadNewPlaylist(newPlaylist)
-                onSuccess() // Avisamos a la UI que terminamos
+                saveAndReloadAll(newPlaylist)
+                onSuccess()
             }
         }
     }
@@ -133,23 +151,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     sourceValue = uri.toString(),
                     order = _playlists.value.size
                 )
-                saveAndLoadNewPlaylist(newPlaylist)
+                saveAndReloadAll(newPlaylist)
                 onSuccess()
             }
         }
     }
 
-    private suspend fun saveAndLoadNewPlaylist(newPlaylist: Playlist) {
+    private suspend fun saveAndReloadAll(newPlaylist: Playlist) {
         val updatedPlaylists = _playlists.value + newPlaylist
         _playlists.value = updatedPlaylists
         Prefs.savePlaylists(context, updatedPlaylists)
-        loadPlaylist(newPlaylist)
         _isConfigured.value = true
+        loadAllChannels(updatedPlaylists)
     }
 
     fun selectPlaylist(playlist: Playlist) {
         viewModelScope.launch {
-            loadPlaylist(playlist)
+            _selectedGroup.value = playlist.name
         }
     }
 
@@ -164,10 +182,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (updatedPlaylists.isEmpty()) {
                 _allChannels.value = emptyList()
                 _selectedChannel.value = null
-                _selectedPlaylist.value = null
                 _isConfigured.value = false
-            } else if (_selectedPlaylist.value?.id == playlist.id) {
-                loadPlaylist(updatedPlaylists.first())
+            } else {
+                loadAllChannels(updatedPlaylists)
             }
         }
     }

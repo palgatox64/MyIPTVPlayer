@@ -43,9 +43,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -70,7 +68,6 @@ fun PlayerScreen(
     onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onAddPlaylist: () -> Unit,
-    // Parámetros de Grupos
     groups: List<String>,
     selectedGroup: String,
     onGroupSelected: (String) -> Unit
@@ -95,21 +92,17 @@ fun PlayerScreen(
     }
 
     val exoPlayer = remember {
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
+            .build()
+
         val trackSelector = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
-                    // CAMBIAR A FALSE para emulador
-                    .setTunnelingEnabled(true) // ← Cambia esto
+                    .setForceHighestSupportedBitrate(true)
+                    .setTunnelingEnabled(true)
             )
         }
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                15_000,  // Min buffer (15s en vez de 30s)
-                60_000,  // Max buffer (1 min en vez de 2 min)
-                1_500,   // Buffer para iniciar (1.5s en vez de 2.5s)
-                3_000    // Buffer para reanudar (3s en vez de 5s)
-            )
-            .build()
 
         ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
@@ -117,34 +110,13 @@ fun PlayerScreen(
             .build().apply {
                 playWhenReady = true
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-
-                // AGREGAR: Priorizar sincronización
-                setHandleAudioBecomingNoisy(true)
-
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_BUFFERING) isBuffering = true
                         else if (playbackState == Player.STATE_READY) isBuffering = false
                     }
-
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        // MEJORAR: Resetear completamente en caso de error
-                        android.util.Log.e("MI_IPTV", "Error: ${error.message}", error)
-                        stop()
-                        clearMediaItems()
                         prepare()
-                    }
-                })
-
-                addAnalyticsListener(object : AnalyticsListener {
-                    override fun onDroppedVideoFrames(
-                        eventTime: AnalyticsListener.EventTime,
-                        droppedFrames: Int,
-                        elapsedMs: Long
-                    ) {
-                        if (droppedFrames > 50) { // Si hay muchos frames perdidos
-                            android.util.Log.w("MI_IPTV", "Frames perdidos: $droppedFrames")
-                        }
                     }
                 })
             }
@@ -171,25 +143,10 @@ fun PlayerScreen(
                 isBuffering = true
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
-
-                // AGREGAR: Pequeño delay para limpiar completamente
-                delay(100)
-
                 if (currentChannel.streamUrl.isNotBlank()) {
-                    val mediaItem = MediaItem.Builder()
-                        .setUri(currentChannel.streamUrl)
-                        .setLiveConfiguration(
-                            MediaItem.LiveConfiguration.Builder()
-                                .setMaxPlaybackSpeed(1.02f) // Permitir acelerar ligeramente para alcanzar el live
-                                .build()
-                        )
-                        .build()
-
+                    val mediaItem = MediaItem.fromUri(currentChannel.streamUrl)
                     exoPlayer.setMediaItem(mediaItem)
                     exoPlayer.prepare()
-
-                    // NUEVO: Forzar play después de preparar
-                    exoPlayer.playWhenReady = true
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MI_IPTV", "Error loading video", e)
@@ -246,17 +203,9 @@ fun PlayerScreen(
             Row(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(420.dp) // Un poco más ancho para los grupos
+                    .width(420.dp)
                     .background(Brush.horizontalGradient(colors = listOf(Color.Black.copy(alpha = 0.98f), Color.Transparent)))
                     .padding(20.dp)
-                    .onPreviewKeyEvent { keyEvent ->
-                        if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN && keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                            isMenuVisible = false
-                            videoFocusRequester.requestFocus()
-                            return@onPreviewKeyEvent true
-                        }
-                        false
-                    }
             ) {
                 Crossfade(targetState = isSettingsOpen, label = "MenuSwitch") { showSettings ->
 
@@ -275,11 +224,19 @@ fun PlayerScreen(
                             channels = channels,
                             currentChannel = currentChannel,
                             listState = listState,
-                            onChannelSelected = onChannelSelected,
+                            onChannelSelected = { channel ->
+                                onChannelSelected(channel)
+                                isMenuVisible = false
+                                videoFocusRequester.requestFocus()
+                            },
                             onOpenSettings = { isSettingsOpen = true },
                             groups = groups,
                             selectedGroup = selectedGroup,
-                            onGroupSelected = onGroupSelected
+                            onGroupSelected = onGroupSelected,
+                            onCloseMenu = {
+                                isMenuVisible = false
+                                videoFocusRequester.requestFocus()
+                            }
                         )
                     }
                 }
@@ -298,9 +255,13 @@ fun ChannelsView(
     onOpenSettings: () -> Unit,
     groups: List<String>,
     selectedGroup: String,
-    onGroupSelected: (String) -> Unit
+    onGroupSelected: (String) -> Unit,
+    onCloseMenu: () -> Unit
 ) {
     val headerFocus = remember { FocusRequester() }
+
+    // ESTADO CLAVE: Controla que el foco automático SOLO ocurra al abrir el menú
+    val needsInitialFocus = remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         if (currentChannel != null) {
@@ -312,22 +273,29 @@ fun ChannelsView(
     }
 
     Column {
+        var isSettingsFocused by remember { mutableStateOf(false) }
+
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 10.dp)
                 .focusRequester(headerFocus)
-                .clickable { onOpenSettings() }
+                .onFocusChanged { isSettingsFocused = it.isFocused }
                 .focusable()
+                .clickable { onOpenSettings() }
+                .background(
+                    color = if (isSettingsFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                )
                 .padding(8.dp)
         ) {
-            Icon(Icons.Default.Settings, contentDescription = null, tint = Color.LightGray)
+            val contentColor = if (isSettingsFocused) Color.White else Color.LightGray
+            Icon(Icons.Default.Settings, contentDescription = null, tint = contentColor)
             Spacer(modifier = Modifier.width(10.dp))
-            Text("Configuración", color = Color.LightGray, fontWeight = FontWeight.Bold)
+            Text("Configuración", color = contentColor, fontWeight = FontWeight.Bold)
         }
 
-        // --- BARRA DE GRUPOS ---
         LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
@@ -358,20 +326,31 @@ fun ChannelsView(
             }
         }
 
-        // --- LISTA DE CANALES ---
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                        keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        onCloseMenu()
+                        return@onPreviewKeyEvent true
+                    }
+                    false
+                }
         ) {
             items(items = channels, key = { it.id }) { channel ->
                 val isSelected = channel == currentChannel
                 var isFocused by remember { mutableStateOf(false) }
                 val itemFocus = remember { FocusRequester() }
 
-                if (isSelected) {
+                // LOGICA CORREGIDA: Solo pedir foco si es la primera vez (needsInitialFocus)
+                if (isSelected && needsInitialFocus.value) {
                     LaunchedEffect(Unit) {
                         delay(50)
                         itemFocus.requestFocus()
+                        // Una vez pedido el foco, desactivamos la bandera para que no moleste al scrollear
+                        needsInitialFocus.value = false
                     }
                 }
 
@@ -413,7 +392,7 @@ fun ChannelsView(
     }
 }
 
-// SettingsView se mantiene igual que en tu código anterior...
+// SettingsView (Sin cambios)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsView(

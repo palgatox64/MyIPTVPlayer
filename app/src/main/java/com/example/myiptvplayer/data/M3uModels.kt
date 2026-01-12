@@ -7,5 +7,6 @@ data class Channel(
     val logoUrl: String?,    // tvg-logo
     val group: String?,      // group-title (ej: "Nacional")
     val streamUrl: String,   // El enlace largo http...
-    val playlistId: Int = 0  // Lo usaremos después para la base de datos
+    val playlistId: Int = 0,  // Lo usaremos después para la base de datos
+    val playlistName: String = "" // NUEVO CAMPO: Para saber de qué lista vino
 )
