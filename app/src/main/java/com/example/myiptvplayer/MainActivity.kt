@@ -52,7 +52,8 @@ class MainActivity : ComponentActivity() {
         Coil.setImageLoader(imageLoader)
 
         setContent {
-            MyIPTVPlayerTheme {
+            // CAMBIO AQUÍ: Forzamos 'darkTheme = true' para que siempre se vea oscuro
+            MyIPTVPlayerTheme(isInDarkTheme = true) {
                 Surface(modifier = Modifier.fillMaxSize(), shape = RectangleShape) {
                     AppNavigation()
                 }
@@ -66,21 +67,16 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val viewModel: MainViewModel = viewModel()
 
-    // Recolectamos flujos del ViewModel
     val channels by viewModel.channels.collectAsState(initial = emptyList())
     val currentChannel by viewModel.selectedChannel.collectAsState()
     val isConfigured by viewModel.isConfigured.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     val selectedPlaylist by viewModel.selectedPlaylist.collectAsState()
 
-    // Nuevos flujos para grupos
     val groups by viewModel.groups.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
 
-    // Lógica de Redirección Inicial (Solo si la app recién abre)
     LaunchedEffect(isConfigured) {
-        // Solo navegamos automáticamente si NO estamos ya en Config ni en Player (arranque)
-        // O si se borró la configuración
         if (isConfigured == true && navController.currentDestination?.route != "player" && navController.currentDestination?.route != "config") {
             navController.navigate("player") { popUpTo("config") { inclusive = true } }
         } else if (isConfigured == false) {
@@ -93,8 +89,6 @@ fun AppNavigation() {
     NavHost(navController = navController, startDestination = "config") {
 
         composable("config") {
-            // CORRECCIÓN: Si isConfigured es NULL, cargamos. Si es TRUE o FALSE, mostramos la pantalla.
-            // Esto permite entrar a "config" para agregar listas aunque ya existan otras.
             if (isConfigured == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     androidx.tv.material3.Text("Cargando perfil...", color = Color.White)
@@ -103,7 +97,6 @@ fun AppNavigation() {
                 ConfigScreen(
                     onUrlSelected = { name, url ->
                         viewModel.addPlaylistFromUrl(name, url) {
-                            // Al terminar de agregar, volvemos al player
                             navController.navigate("player") { popUpTo("config") { inclusive = true } }
                         }
                     },
@@ -127,7 +120,6 @@ fun AppNavigation() {
                 onPlaylistSelected = { viewModel.selectPlaylist(it) },
                 onDeletePlaylist = { viewModel.deletePlaylist(it) },
                 onAddPlaylist = { navController.navigate("config") },
-                // Pasamos datos de grupos
                 groups = groups,
                 selectedGroup = selectedGroup,
                 onGroupSelected = { viewModel.selectGroup(it) }
@@ -142,8 +134,9 @@ fun ConfigScreen(
     onUrlSelected: (String, String) -> Unit,
     onFileSelected: (String, Uri) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var nameInput by remember { mutableStateOf("") }
+    var nameInput by remember { mutableStateOf("" ) }
     var urlInput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
@@ -206,7 +199,11 @@ fun ConfigScreen(
         Button(
             onClick = {
                 if (nameInput.isNotEmpty()) {
-                    filePickerLauncher.launch(arrayOf("*/*"))
+                    try {
+                        filePickerLauncher.launch(arrayOf("*/*"))
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(context, "No hay explorador de archivos instalado", android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         ) {

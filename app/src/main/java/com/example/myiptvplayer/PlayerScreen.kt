@@ -55,6 +55,7 @@ import coil.compose.AsyncImage
 import com.example.myiptvplayer.data.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
@@ -78,6 +79,21 @@ fun PlayerScreen(
     var isMenuVisible by remember { mutableStateOf(true) }
     var isSettingsOpen by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(true) }
+
+    // Estados para el control de volumen
+    var currentVolume by remember { mutableFloatStateOf(1f) }
+    var showVolumeIndicator by remember { mutableStateOf(false) }
+    // Trigger para reiniciar el timer incluso si el volumen no cambia (ej. 100 -> 100)
+    var volumeTrigger by remember { mutableLongStateOf(0L) }
+
+    // Ocultar indicador de volumen automáticamente después de 2 segundos
+    // AHORA ESCUCHA A 'volumeTrigger', no a 'currentVolume'
+    LaunchedEffect(volumeTrigger) {
+        if (showVolumeIndicator) {
+            delay(2000)
+            showVolumeIndicator = false
+        }
+    }
 
     val videoFocusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
@@ -140,6 +156,12 @@ fun PlayerScreen(
     LaunchedEffect(currentChannel) {
         if (currentChannel != null) {
             try {
+                // CARGAR VOLUMEN ESPECÍFICO DEL CANAL
+                val savedVolume = Prefs.getChannelVolume(context, currentChannel.id)
+                currentVolume = savedVolume
+                exoPlayer.volume = savedVolume
+
+                // INICIAR REPRODUCCIÓN
                 isBuffering = true
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
@@ -164,9 +186,42 @@ fun PlayerScreen(
                 .onKeyEvent { keyEvent ->
                     if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
                         when (keyEvent.nativeKeyEvent.keyCode) {
+                            // MOSTRAR MENÚ
                             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                                 isMenuVisible = true
                                 isSettingsOpen = false
+                                return@onKeyEvent true
+                            }
+
+                            // SUBIR VOLUMEN
+                            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_VOLUME_UP -> {
+                                val currentInt = (currentVolume * 10).roundToInt()
+                                val newVol = ((currentInt + 1).coerceAtMost(10) / 10f)
+
+                                currentVolume = newVol
+                                exoPlayer.volume = newVol
+                                showVolumeIndicator = true
+                                volumeTrigger = System.currentTimeMillis() // Forzar reinicio del timer
+
+                                if (currentChannel != null) {
+                                    Prefs.saveChannelVolume(context, currentChannel.id, newVol)
+                                }
+                                return@onKeyEvent true
+                            }
+
+                            // BAJAR VOLUMEN
+                            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                                val currentInt = (currentVolume * 10).roundToInt()
+                                val newVol = ((currentInt - 1).coerceAtLeast(0) / 10f)
+
+                                currentVolume = newVol
+                                exoPlayer.volume = newVol
+                                showVolumeIndicator = true
+                                volumeTrigger = System.currentTimeMillis() // Forzar reinicio del timer
+
+                                if (currentChannel != null) {
+                                    Prefs.saveChannelVolume(context, currentChannel.id, newVol)
+                                }
                                 return@onKeyEvent true
                             }
                         }
@@ -191,6 +246,29 @@ fun PlayerScreen(
                     modifier = Modifier.align(Alignment.Center).size(50.dp),
                     color = Color(0xFF00BFA5),
                     strokeWidth = 4.dp
+                )
+            }
+        }
+
+        // INDICADOR VISUAL DE VOLUMEN
+        AnimatedVisibility(
+            visible = showVolumeIndicator,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(30.dp),
+            enter = slideInHorizontally { it },
+            exit = slideOutHorizontally { it }
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.7f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Volumen: ${(currentVolume * 100).roundToInt()}%",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    style = androidx.tv.material3.MaterialTheme.typography.titleMedium
                 )
             }
         }
@@ -392,7 +470,6 @@ fun ChannelsView(
     }
 }
 
-// SettingsView (Sin cambios)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsView(

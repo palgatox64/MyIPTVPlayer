@@ -1,6 +1,7 @@
 package com.example.myiptvplayer
 
 import android.content.Context
+import androidx.core.content.edit // Importante para quitar los warnings
 import com.example.myiptvplayer.data.Playlist
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,6 +11,7 @@ object Prefs {
     private const val KEY_PLAYLISTS = "playlists"
     private const val KEY_SELECTED_PLAYLIST = "selected_playlist_id"
     private const val KEY_LAST_CHANNEL = "last_channel_id"
+    private const val KEY_VOLUME_PREFIX = "vol_"
 
     fun savePlaylists(context: Context, playlists: List<Playlist>) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -25,13 +27,16 @@ object Prefs {
             }
             jsonArray.put(jsonObject)
         }
-        prefs.edit().putString(KEY_PLAYLISTS, jsonArray.toString()).apply()
+        // Sintaxis KTX (sin warnings)
+        prefs.edit {
+            putString(KEY_PLAYLISTS, jsonArray.toString())
+        }
     }
 
     fun getPlaylists(context: Context): List<Playlist> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonString = prefs.getString(KEY_PLAYLISTS, null) ?: return emptyList()
-        
+
         val playlists = mutableListOf<Playlist>()
         try {
             val jsonArray = JSONArray(jsonString)
@@ -55,8 +60,9 @@ object Prefs {
     }
 
     fun saveSelectedPlaylist(context: Context, playlistId: String) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putString(KEY_SELECTED_PLAYLIST, playlistId).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putString(KEY_SELECTED_PLAYLIST, playlistId)
+        }
     }
 
     fun getSelectedPlaylistId(context: Context): String? {
@@ -65,8 +71,9 @@ object Prefs {
     }
 
     fun saveLastChannel(context: Context, channelId: String) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putString(KEY_LAST_CHANNEL, channelId).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putString(KEY_LAST_CHANNEL, channelId)
+        }
     }
 
     fun getLastChannel(context: Context): String? {
@@ -74,8 +81,20 @@ object Prefs {
             .getString(KEY_LAST_CHANNEL, null)
     }
 
+    fun saveChannelVolume(context: Context, channelId: String, volume: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putFloat(KEY_VOLUME_PREFIX + channelId, volume)
+        }
+    }
+
+    fun getChannelVolume(context: Context, channelId: String): Float {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_VOLUME_PREFIX + channelId, 1.0f)
+    }
+
     fun clearAll(context: Context) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().clear().apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            clear()
+        }
     }
 }
