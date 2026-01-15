@@ -25,22 +25,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _allChannels = MutableStateFlow<List<Channel>>(emptyList())
 
-    // Inicializamos vacío
     private val _selectedGroup = MutableStateFlow("")
     val selectedGroup = _selectedGroup.asStateFlow()
 
     private val _groups = MutableStateFlow<List<String>>(emptyList())
     val groups = _groups.asStateFlow()
 
-    // Lógica de filtrado: Ahora será puramente por Playlist
     val channels = combine(_allChannels, _selectedGroup, _playlists) { all, group, playlists ->
         val isPlaylistName = playlists.any { it.name == group }
 
         when {
             group.isEmpty() -> emptyList()
-            // Si el nombre coincide con una Playlist, mostramos todo el contenido de esa lista
             isPlaylistName -> all.filter { it.playlistName == group }
-            // Mantenemos la lógica de grupo por seguridad, aunque ya no la mostremos en la barra
             else -> all.filter { it.group == group }
         }
     }
@@ -89,13 +85,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (totalChannels.isNotEmpty()) {
             _allChannels.value = totalChannels
 
-            // CAMBIO CLAVE: Solo usamos los nombres de las Playlists como categorías.
-            // Ignoramos 'group-title' internos para no ensuciar la barra.
             val playlistNames = playlists.map { it.name }.sorted()
-
             _groups.value = playlistNames
 
-            // Seleccionar la primera lista por defecto si la actual no es válida
             if (_selectedGroup.value !in playlistNames && playlistNames.isNotEmpty()) {
                 _selectedGroup.value = playlistNames.first()
             }
@@ -154,6 +146,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 saveAndReloadAll(newPlaylist)
                 onSuccess()
             }
+        }
+    }
+
+    // --- NUEVA FUNCIÓN: ACTUALIZAR LISTA ---
+    fun updatePlaylist(originalPlaylist: Playlist, newName: String, newSourceValue: String, newSourceType: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            // Intentamos cargar la lista para validar que funciona (opcional, pero recomendado)
+            val list = if (newSourceType == "url") {
+                PlaylistRepository.loadFromUrl(newSourceValue)
+            } else {
+                PlaylistRepository.loadFromFile(context, Uri.parse(newSourceValue))
+            }
+
+            // Actualizamos la lista en memoria manteniendo el ID y el orden original
+            val updatedList = _playlists.value.map {
+                if (it.id == originalPlaylist.id) {
+                    it.copy(name = newName, sourceType = newSourceType, sourceValue = newSourceValue)
+                } else {
+                    it
+                }
+            }
+
+            _playlists.value = updatedList
+            Prefs.savePlaylists(context, updatedList)
+            loadAllChannels(updatedList)
+            onSuccess()
         }
     }
 

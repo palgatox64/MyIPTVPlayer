@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -69,6 +70,7 @@ fun PlayerScreen(
     onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onAddPlaylist: () -> Unit,
+    onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit, // NUEVO CALLBACK
     groups: List<String>,
     selectedGroup: String,
     onGroupSelected: (String) -> Unit
@@ -83,11 +85,10 @@ fun PlayerScreen(
     // Estados para el control de volumen
     var currentVolume by remember { mutableFloatStateOf(1f) }
     var showVolumeIndicator by remember { mutableStateOf(false) }
-    // Trigger para reiniciar el timer incluso si el volumen no cambia (ej. 100 -> 100)
+    // Trigger para reiniciar el timer incluso si el volumen no cambia
     var volumeTrigger by remember { mutableLongStateOf(0L) }
 
-    // Ocultar indicador de volumen automáticamente después de 2 segundos
-    // AHORA ESCUCHA A 'volumeTrigger', no a 'currentVolume'
+    // Ocultar indicador de volumen automáticamente
     LaunchedEffect(volumeTrigger) {
         if (showVolumeIndicator) {
             delay(2000)
@@ -201,7 +202,7 @@ fun PlayerScreen(
                                 currentVolume = newVol
                                 exoPlayer.volume = newVol
                                 showVolumeIndicator = true
-                                volumeTrigger = System.currentTimeMillis() // Forzar reinicio del timer
+                                volumeTrigger = System.currentTimeMillis()
 
                                 if (currentChannel != null) {
                                     Prefs.saveChannelVolume(context, currentChannel.id, newVol)
@@ -217,7 +218,7 @@ fun PlayerScreen(
                                 currentVolume = newVol
                                 exoPlayer.volume = newVol
                                 showVolumeIndicator = true
-                                volumeTrigger = System.currentTimeMillis() // Forzar reinicio del timer
+                                volumeTrigger = System.currentTimeMillis()
 
                                 if (currentChannel != null) {
                                     Prefs.saveChannelVolume(context, currentChannel.id, newVol)
@@ -295,7 +296,8 @@ fun PlayerScreen(
                             selectedPlaylist = selectedPlaylist,
                             onPlaylistSelected = onPlaylistSelected,
                             onDeletePlaylist = onDeletePlaylist,
-                            onAddPlaylist = onAddPlaylist
+                            onAddPlaylist = onAddPlaylist,
+                            onEditPlaylist = onEditPlaylist
                         )
                     } else {
                         ChannelsView(
@@ -422,12 +424,10 @@ fun ChannelsView(
                 var isFocused by remember { mutableStateOf(false) }
                 val itemFocus = remember { FocusRequester() }
 
-                // LOGICA CORREGIDA: Solo pedir foco si es la primera vez (needsInitialFocus)
                 if (isSelected && needsInitialFocus.value) {
                     LaunchedEffect(Unit) {
                         delay(50)
                         itemFocus.requestFocus()
-                        // Una vez pedido el foco, desactivamos la bandera para que no moleste al scrollear
                         needsInitialFocus.value = false
                     }
                 }
@@ -479,7 +479,8 @@ fun SettingsView(
     selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
     onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
     onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onAddPlaylist: () -> Unit
+    onAddPlaylist: () -> Unit,
+    onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit // Recibimos el callback
 ) {
     val backButtonFocus = remember { FocusRequester() }
 
@@ -520,42 +521,76 @@ fun SettingsView(
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(playlists, key = { it.id }) { playlist ->
                 val isSelected = playlist == selectedPlaylist
-                var isFocused by remember { mutableStateOf(false) }
+
+                var isItemFocused by remember { mutableStateOf(false) }
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .onFocusChanged { isFocused = it.isFocused }
-                        .focusable()
-                        .clickable { onPlaylistSelected(playlist) }
-                        .background(
-                            color = when {
-                                isSelected -> Color(0xFF00BFA5).copy(alpha = 0.7f)
-                                isFocused -> Color.White.copy(alpha = 0.2f)
-                                else -> Color.Transparent
-                            },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                        )
-                        .padding(12.dp),
+                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = playlist.name,
-                            color = Color.White,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Text(
-                            text = if (playlist.sourceType == "url") "URL" else "Archivo",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
+                    // 1. ZONA DE TEXTO (Seleccionar)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { isItemFocused = it.isFocused }
+                            .clickable { onPlaylistSelected(playlist) }
+                            .focusable()
+                            .background(
+                                color = when {
+                                    isSelected -> Color(0xFF00BFA5).copy(alpha = 0.7f)
+                                    isItemFocused -> Color.White.copy(alpha = 0.2f)
+                                    else -> Color.Transparent
+                                },
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            )
+                            .padding(12.dp)
+                    ) {
+                        Column {
+                            Text(
+                                text = playlist.name,
+                                color = Color.White,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Text(
+                                text = if (playlist.sourceType == "url") "URL" else "Archivo",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
 
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // 2. BOTÓN DE EDITAR (Amarillo)
+                    Button(
+                        onClick = { onEditPlaylist(playlist) },
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color(0xFFFFD600), // Amarillo
+                            contentColor = Color.Black,
+                            focusedContainerColor = Color(0xFFFFEA00),
+                            focusedContentColor = Color.Black
+                        ),
+                        shape = ButtonDefaults.shape(shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                        modifier = Modifier.size(40.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = "Editar", modifier = Modifier.size(20.dp))
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // 3. BOTÓN DE BORRAR (Rojo)
                     Button(
                         onClick = { onDeletePlaylist(playlist) },
-                        colors = ButtonDefaults.colors(containerColor = Color(0xFFB00020), contentColor = Color.White),
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color(0xFFB00020), // Rojo
+                            contentColor = Color.White,
+                            focusedContainerColor = Color(0xFFFF1744),
+                            focusedContentColor = Color.White
+                        ),
+                        shape = ButtonDefaults.shape(shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
                         modifier = Modifier.size(40.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {

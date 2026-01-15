@@ -5,6 +5,7 @@ import coil.ImageLoader
 import okhttp3.OkHttpClient
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -16,11 +17,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -30,6 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
+import com.example.myiptvplayer.data.Playlist
 import com.example.myiptvplayer.ui.theme.MyIPTVPlayerTheme
 
 class MainActivity : ComponentActivity() {
@@ -52,7 +57,6 @@ class MainActivity : ComponentActivity() {
         Coil.setImageLoader(imageLoader)
 
         setContent {
-            // CAMBIO AQUÍ: Forzamos 'darkTheme = true' para que siempre se vea oscuro
             MyIPTVPlayerTheme(isInDarkTheme = true) {
                 Surface(modifier = Modifier.fillMaxSize(), shape = RectangleShape) {
                     AppNavigation()
@@ -72,41 +76,59 @@ fun AppNavigation() {
     val isConfigured by viewModel.isConfigured.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     val selectedPlaylist by viewModel.selectedPlaylist.collectAsState()
-
     val groups by viewModel.groups.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
 
-    LaunchedEffect(isConfigured) {
-        if (isConfigured == true && navController.currentDestination?.route != "player" && navController.currentDestination?.route != "config") {
-            navController.navigate("player") { popUpTo("config") { inclusive = true } }
-        } else if (isConfigured == false) {
-            if (navController.currentDestination?.route == "player") {
-                navController.navigate("config") { popUpTo("player") { inclusive = true } }
+    // Estado para saber si estamos editando una lista específica
+    var playlistToEdit by remember { mutableStateOf<Playlist?>(null) }
+
+    NavHost(navController = navController, startDestination = "loading") {
+
+        composable("loading") {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+            }
+            LaunchedEffect(isConfigured) {
+                if (isConfigured == true) {
+                    navController.navigate("player") { popUpTo("loading") { inclusive = true } }
+                } else if (isConfigured == false) {
+                    navController.navigate("config") { popUpTo("loading") { inclusive = true } }
+                }
             }
         }
-    }
-
-    NavHost(navController = navController, startDestination = "config") {
 
         composable("config") {
-            if (isConfigured == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    androidx.tv.material3.Text("Cargando perfil...", color = Color.White)
-                }
-            } else {
-                ConfigScreen(
-                    onUrlSelected = { name, url ->
+            ConfigScreen(
+                playlistToEdit = playlistToEdit,
+                onUrlSelected = { name, url ->
+                    if (playlistToEdit != null) {
+                        viewModel.updatePlaylist(playlistToEdit!!, name, url, "url") {
+                            playlistToEdit = null
+                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                        }
+                    } else {
                         viewModel.addPlaylistFromUrl(name, url) {
                             navController.navigate("player") { popUpTo("config") { inclusive = true } }
                         }
-                    },
-                    onFileSelected = { name, uri ->
+                    }
+                },
+                onFileSelected = { name, uri ->
+                    if (playlistToEdit != null) {
+                        viewModel.updatePlaylist(playlistToEdit!!, name, uri.toString(), "file") {
+                            playlistToEdit = null
+                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                        }
+                    } else {
                         viewModel.addPlaylistFromFile(name, uri) {
                             navController.navigate("player") { popUpTo("config") { inclusive = true } }
                         }
                     }
-                )
-            }
+                },
+                onCancel = {
+                    playlistToEdit = null
+                    if (isConfigured == true) navController.navigate("player")
+                }
+            )
         }
 
         composable("player") {
@@ -119,7 +141,14 @@ fun AppNavigation() {
                 selectedPlaylist = selectedPlaylist,
                 onPlaylistSelected = { viewModel.selectPlaylist(it) },
                 onDeletePlaylist = { viewModel.deletePlaylist(it) },
-                onAddPlaylist = { navController.navigate("config") },
+                onAddPlaylist = {
+                    playlistToEdit = null
+                    navController.navigate("config")
+                },
+                onEditPlaylist = { playlist ->
+                    playlistToEdit = playlist
+                    navController.navigate("config")
+                },
                 groups = groups,
                 selectedGroup = selectedGroup,
                 onGroupSelected = { viewModel.selectGroup(it) }
@@ -131,14 +160,23 @@ fun AppNavigation() {
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun ConfigScreen(
+    playlistToEdit: Playlist? = null,
     onUrlSelected: (String, String) -> Unit,
-    onFileSelected: (String, Uri) -> Unit
+    onFileSelected: (String, Uri) -> Unit,
+    onCancel: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = rememberCoroutineScope()
-    var nameInput by remember { mutableStateOf("" ) }
-    var urlInput by remember { mutableStateOf("") }
+
+    // Estados del formulario
+    var nameInput by remember { mutableStateOf(playlistToEdit?.name ?: "") }
+    var urlInput by remember { mutableStateOf(if (playlistToEdit?.sourceType == "url") playlistToEdit.sourceValue else "") }
     var isLoading by remember { mutableStateOf(false) }
+
+    // ESTADOS DE UX: Controlan si el teclado debe mostrarse
+    // false = Solo Lectura (Foco sin teclado)
+    // true = Edición (Foco con teclado)
+    var isNameEditing by remember { mutableStateOf(false) }
+    var isUrlEditing by remember { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -149,20 +187,47 @@ fun ConfigScreen(
         }
     }
 
+    val title = if (playlistToEdit != null) "Editar Lista" else "Agregar Lista IPTV"
+    val buttonText = if (playlistToEdit != null) "Guardar Cambios" else "Cargar URL"
+
     Column(modifier = Modifier.fillMaxSize().padding(40.dp)) {
-        androidx.tv.material3.Text("Agregar Lista IPTV", style = androidx.tv.material3.MaterialTheme.typography.headlineLarge)
-        androidx.tv.material3.Text("Dale un nombre a tu lista (ej: Deportes, Cine)", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        androidx.tv.material3.Text(title, style = androidx.tv.material3.MaterialTheme.typography.headlineLarge)
+
+        if (playlistToEdit == null) {
+            androidx.tv.material3.Text("Dale un nombre a tu lista (ej: Deportes, Cine)", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        } else {
+            androidx.tv.material3.Text("Modificando: ${playlistToEdit.name}", style = androidx.tv.material3.MaterialTheme.typography.bodyMedium, color = Color.Yellow)
+        }
 
         Spacer(modifier = Modifier.height(30.dp))
 
+        // CAMPO NOMBRE DE LISTA
         OutlinedTextField(
             value = nameInput,
             onValueChange = { nameInput = it },
             label = { Text("Nombre de la lista") },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged {
+                    // Si perdemos el foco, dejamos de editar (cierra teclado en la prox interaccion)
+                    if (!it.isFocused) isNameEditing = false
+                }
+                .onKeyEvent { event ->
+                    // Si pulsamos ENTER o D-PAD CENTER, activamos la edición
+                    if (!isNameEditing && (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                                event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER)) {
+                        if (event.nativeKeyEvent.action == KeyEvent.ACTION_UP) {
+                            isNameEditing = true
+                        }
+                        return@onKeyEvent true
+                    }
+                    false
+                },
+            readOnly = !isNameEditing, // TRUCO CLAVE: Si es true, no abre teclado
+            singleLine = true,
             textStyle = TextStyle(color = Color.White),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color.Cyan,
+                focusedBorderColor = if (isNameEditing) Color.Cyan else Color.White, // Feedback visual
                 unfocusedBorderColor = Color.Gray,
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White
@@ -172,26 +237,45 @@ fun ConfigScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // CAMPO URL
             OutlinedTextField(
                 value = urlInput,
                 onValueChange = { urlInput = it },
-                label = { Text("https://...") },
-                modifier = Modifier.weight(1f),
+                label = { Text(if (playlistToEdit?.sourceType == "file") "Archivo seleccionado (solo lectura)" else "https://...") },
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { if (!it.isFocused) isUrlEditing = false }
+                    .onKeyEvent { event ->
+                        if (!isUrlEditing && (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                                    event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER)) {
+                            if (event.nativeKeyEvent.action == KeyEvent.ACTION_UP) {
+                                isUrlEditing = true
+                            }
+                            return@onKeyEvent true
+                        }
+                        false
+                    },
+                readOnly = !isUrlEditing, // TRUCO CLAVE
+                singleLine = true,
+                enabled = playlistToEdit?.sourceType != "file",
                 textStyle = TextStyle(color = Color.White),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Cyan,
+                    focusedBorderColor = if (isUrlEditing) Color.Cyan else Color.White,
                     unfocusedBorderColor = Color.Gray,
                     focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    unfocusedTextColor = Color.White,
+                    disabledTextColor = Color.Gray,
+                    disabledBorderColor = Color.DarkGray
                 )
             )
             Spacer(modifier = Modifier.width(10.dp))
+
             Button(onClick = {
                 if (urlInput.isNotEmpty() && nameInput.isNotEmpty()) {
                     isLoading = true
                     onUrlSelected(nameInput, urlInput)
                 }
-            }) { Text("Cargar URL") }
+            }) { Text(buttonText) }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -210,7 +294,18 @@ fun ConfigScreen(
             Row {
                 Icon(Icons.Default.FolderOpen, null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Cargar Archivo Local")
+                Text(if (playlistToEdit != null) "Reemplazar Archivo Local" else "Cargar Archivo Local")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        if (playlistToEdit != null) {
+            Button(
+                onClick = onCancel,
+                colors = androidx.tv.material3.ButtonDefaults.colors(containerColor = Color.Gray)
+            ) {
+                Text("Cancelar")
             }
         }
 
