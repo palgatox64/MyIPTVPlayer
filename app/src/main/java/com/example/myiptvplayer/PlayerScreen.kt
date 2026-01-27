@@ -55,6 +55,7 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.myiptvplayer.data.Channel
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -357,6 +358,8 @@ fun PlayerScreen(
                                     )
                                     .padding(20.dp)
             ) {
+                val context = LocalContext.current
+                
                 Crossfade(targetState = isSettingsOpen, label = "MenuSwitch") { showSettings ->
                     if (showSettings) {
                         SettingsView(
@@ -367,7 +370,12 @@ fun PlayerScreen(
                                 onPlaylistSelected = onPlaylistSelected,
                                 onDeletePlaylist = onDeletePlaylist,
                                 onAddPlaylist = onAddPlaylist,
-                                onEditPlaylist = onEditPlaylist
+                                onEditPlaylist = onEditPlaylist,
+                                onReloadLogos = {
+                                    val imageLoader = coil.Coil.imageLoader(context)
+                                    imageLoader.memoryCache?.clear()
+                                    imageLoader.diskCache?.clear()
+                                }
                         )
                     } else {
                         ChannelsView(
@@ -533,8 +541,14 @@ fun ChannelsView(
                                         )
                                         .padding(10.dp)
                 ) {
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     AsyncImage(
-                            model = channel.logoUrl,
+                            model = ImageRequest.Builder(context)
+                                    .data(channel.logoUrl)
+                                    .crossfade(true)
+                                    .memoryCacheKey(channel.logoUrl)
+                                    .diskCacheKey(channel.logoUrl)
+                                    .build(),
                             contentDescription = null,
                             modifier = Modifier.size(45.dp)
                     )
@@ -562,7 +576,8 @@ fun SettingsView(
         onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
         onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
         onAddPlaylist: () -> Unit,
-        onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit
+        onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        onReloadLogos: () -> Unit
 ) {
     val backButtonFocus = remember { FocusRequester() }
 
@@ -605,6 +620,22 @@ fun SettingsView(
                                 contentColor = Color.White
                         )
         ) { Text("+ Agregar Lista") }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+                onClick = onReloadLogos,
+                modifier = Modifier.fillMaxWidth(),
+                colors =
+                        ButtonDefaults.colors(
+                                containerColor = Color(0xFF2196F3),
+                                contentColor = Color.White
+                        )
+        ) {
+            Icon(Icons.Default.Settings, contentDescription = null)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text("🔄 Forzar Recarga de Logos")
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 

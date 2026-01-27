@@ -38,6 +38,7 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import coil.Coil
 import coil.ImageLoader
+import coil.decode.SvgDecoder
 import okhttp3.OkHttpClient
 import com.example.myiptvplayer.data.Playlist
 import com.example.myiptvplayer.ui.theme.MyIPTVPlayerTheme
@@ -48,16 +49,23 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val imageLoader = ImageLoader.Builder(this)
+            .components {
+                add(SvgDecoder.Factory())
+            }
             .okHttpClient {
                 OkHttpClient.Builder()
                     .addInterceptor { chain ->
                         val request = chain.request().newBuilder()
                             .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 10; MyIPTVPlayer) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                            .addHeader("Accept", "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
                             .build()
                         chain.proceed(request)
                     }
+                    .followRedirects(true)
+                    .followSslRedirects(true)
                     .build()
             }
+            .respectCacheHeaders(false)
             .build()
         Coil.setImageLoader(imageLoader)
 

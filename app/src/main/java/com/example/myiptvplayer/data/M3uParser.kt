@@ -5,9 +5,9 @@ import java.io.InputStream
 object M3uParser {
 
     // Expresiones regulares para encontrar los datos específicos en la línea #EXTINF
-    private val regexId = """tvg-id="(.*?)"""".toRegex()
-    private val regexLogo = """tvg-logo="(.*?)"""".toRegex()
-    private val regexGroup = """group-title="(.*?)"""".toRegex()
+    private val regexId = """tvg-id="([^"]*)"""".toRegex()
+    private val regexLogo = """tvg-logo="([^"]*)"""".toRegex()
+    private val regexGroup = """group-title="([^"]*)"""".toRegex()
 
     // Función principal que convierte el archivo en una lista de canales
     fun parse(inputStream: InputStream): List<Channel> {
