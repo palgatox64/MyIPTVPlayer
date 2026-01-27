@@ -44,7 +44,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -54,26 +56,59 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.example.myiptvplayer.data.Channel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import okhttp3.OkHttpClient
+
+private fun getUnsafeOkHttpClient(): OkHttpClient {
+    try {
+        val trustAllCerts =
+                arrayOf<TrustManager>(
+                        object : X509TrustManager {
+                            override fun checkClientTrusted(
+                                    chain: Array<X509Certificate>,
+                                    authType: String
+                            ) {}
+                            override fun checkServerTrusted(
+                                    chain: Array<X509Certificate>,
+                                    authType: String
+                            ) {}
+                            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                        }
+                )
+
+        val sslContext = SSLContext.getInstance("SSL")
+        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+
+        return OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .build()
+    } catch (e: Exception) {
+        throw RuntimeException(e)
+    }
+}
 
 @OptIn(UnstableApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerScreen(
-    channels: List<Channel>,
-    currentChannel: Channel?,
-    onChannelSelected: (Channel) -> Unit,
-    onResetPlaylist: () -> Unit,
-    playlists: List<com.example.myiptvplayer.data.Playlist>,
-    selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
-    onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onAddPlaylist: () -> Unit,
-    onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit, // NUEVO CALLBACK
-    groups: List<String>,
-    selectedGroup: String,
-    onGroupSelected: (String) -> Unit
+        channels: List<Channel>,
+        currentChannel: Channel?,
+        onChannelSelected: (Channel) -> Unit,
+        onResetPlaylist: () -> Unit,
+        playlists: List<com.example.myiptvplayer.data.Playlist>,
+        selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
+        onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        onAddPlaylist: () -> Unit,
+        onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        groups: List<String>,
+        selectedGroup: String,
+        onGroupSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -109,34 +144,46 @@ fun PlayerScreen(
     }
 
     val exoPlayer = remember {
-        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
-            .build()
+        // CORRECCIÓN: Eliminamos el LoadControl personalizado que causaba desfasaje de audio.
+        // Al no setearlo, ExoPlayer usa su configuración por defecto optimizada.
 
-        val trackSelector = DefaultTrackSelector(context).apply {
-            setParameters(
-                buildUponParameters()
-                    .setForceHighestSupportedBitrate(true)
-                    .setTunnelingEnabled(true)
-            )
-        }
+        val trackSelector =
+                DefaultTrackSelector(context).apply {
+                    setParameters(
+                            buildUponParameters()
+                                    .setForceHighestSupportedBitrate(true)
+                                    .setTunnelingEnabled(true)
+                    )
+                }
+
+        // Configurar OkHttpDataSource con cliente inseguro para bypass SSL
+        val dataSourceFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
 
         ExoPlayer.Builder(context)
-            .setTrackSelector(trackSelector)
-            .setLoadControl(loadControl)
-            .build().apply {
-                playWhenReady = true
-                videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                addListener(object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_BUFFERING) isBuffering = true
-                        else if (playbackState == Player.STATE_READY) isBuffering = false
-                    }
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        prepare()
-                    }
-                })
-            }
+                .setMediaSourceFactory(
+                        DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory)
+                )
+                .setTrackSelector(trackSelector)
+                // .setLoadControl(loadControl) // <-- SE ELIMINA ESTA LÍNEA
+                .build()
+                .apply {
+                    playWhenReady = true
+                    videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                    addListener(
+                            object : Player.Listener {
+                                override fun onPlaybackStateChanged(playbackState: Int) {
+                                    if (playbackState == Player.STATE_BUFFERING) isBuffering = true
+                                    else if (playbackState == Player.STATE_READY)
+                                            isBuffering = false
+                                }
+                                override fun onPlayerError(
+                                        error: androidx.media3.common.PlaybackException
+                                ) {
+                                    prepare()
+                                }
+                            }
+                    )
+                }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -178,145 +225,168 @@ fun PlayerScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .focusRequester(videoFocusRequester)
-                .focusable()
-                .onKeyEvent { keyEvent ->
-                    if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
-                        when (keyEvent.nativeKeyEvent.keyCode) {
-                            // MOSTRAR MENÚ
-                            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                isMenuVisible = true
-                                isSettingsOpen = false
-                                return@onKeyEvent true
-                            }
+                modifier =
+                        Modifier.fillMaxSize()
+                                .focusRequester(videoFocusRequester)
+                                .focusable()
+                                .onKeyEvent { keyEvent ->
+                                    if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
+                                        when (keyEvent.nativeKeyEvent.keyCode) {
+                                            // MOSTRAR MENÚ
+                                            KeyEvent.KEYCODE_DPAD_LEFT,
+                                            KeyEvent.KEYCODE_DPAD_CENTER,
+                                            KeyEvent.KEYCODE_ENTER -> {
+                                                isMenuVisible = true
+                                                isSettingsOpen = false
+                                                return@onKeyEvent true
+                                            }
 
-                            // SUBIR VOLUMEN
-                            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_VOLUME_UP -> {
-                                val currentInt = (currentVolume * 10).roundToInt()
-                                val newVol = ((currentInt + 1).coerceAtMost(10) / 10f)
+                                            // SUBIR VOLUMEN
+                                            KeyEvent.KEYCODE_DPAD_UP,
+                                            KeyEvent.KEYCODE_VOLUME_UP -> {
+                                                val currentInt = (currentVolume * 10).roundToInt()
+                                                val newVol =
+                                                        ((currentInt + 1).coerceAtMost(10) / 10f)
 
-                                currentVolume = newVol
-                                exoPlayer.volume = newVol
-                                showVolumeIndicator = true
-                                volumeTrigger = System.currentTimeMillis()
+                                                currentVolume = newVol
+                                                exoPlayer.volume = newVol
+                                                showVolumeIndicator = true
+                                                volumeTrigger = System.currentTimeMillis()
 
-                                if (currentChannel != null) {
-                                    Prefs.saveChannelVolume(context, currentChannel.id, newVol)
+                                                if (currentChannel != null) {
+                                                    Prefs.saveChannelVolume(
+                                                            context,
+                                                            currentChannel.id,
+                                                            newVol
+                                                    )
+                                                }
+                                                return@onKeyEvent true
+                                            }
+
+                                            // BAJAR VOLUMEN
+                                            KeyEvent.KEYCODE_DPAD_DOWN,
+                                            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                                                val currentInt = (currentVolume * 10).roundToInt()
+                                                val newVol =
+                                                        ((currentInt - 1).coerceAtLeast(0) / 10f)
+
+                                                currentVolume = newVol
+                                                exoPlayer.volume = newVol
+                                                showVolumeIndicator = true
+                                                volumeTrigger = System.currentTimeMillis()
+
+                                                if (currentChannel != null) {
+                                                    Prefs.saveChannelVolume(
+                                                            context,
+                                                            currentChannel.id,
+                                                            newVol
+                                                    )
+                                                }
+                                                return@onKeyEvent true
+                                            }
+                                        }
+                                    }
+                                    false
                                 }
-                                return@onKeyEvent true
-                            }
-
-                            // BAJAR VOLUMEN
-                            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                                val currentInt = (currentVolume * 10).roundToInt()
-                                val newVol = ((currentInt - 1).coerceAtLeast(0) / 10f)
-
-                                currentVolume = newVol
-                                exoPlayer.volume = newVol
-                                showVolumeIndicator = true
-                                volumeTrigger = System.currentTimeMillis()
-
-                                if (currentChannel != null) {
-                                    Prefs.saveChannelVolume(context, currentChannel.id, newVol)
-                                }
-                                return@onKeyEvent true
-                            }
-                        }
-                    }
-                    false
-                }
         ) {
             AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        player = exoPlayer
-                        useController = false
-                        keepScreenOn = true
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exoPlayer
+                            useController = false
+                            keepScreenOn = true
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
             )
 
             if (isBuffering) {
                 CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(50.dp),
-                    color = Color(0xFF00BFA5),
-                    strokeWidth = 4.dp
+                        modifier = Modifier.align(Alignment.Center).size(50.dp),
+                        color = Color(0xFF00BFA5),
+                        strokeWidth = 4.dp
                 )
             }
         }
 
         // INDICADOR VISUAL DE VOLUMEN
         AnimatedVisibility(
-            visible = showVolumeIndicator,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(30.dp),
-            enter = slideInHorizontally { it },
-            exit = slideOutHorizontally { it }
+                visible = showVolumeIndicator,
+                modifier = Modifier.align(Alignment.TopEnd).padding(30.dp),
+                enter = slideInHorizontally { it },
+                exit = slideOutHorizontally { it }
         ) {
             Box(
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.7f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                    .padding(16.dp)
+                    modifier =
+                            Modifier.background(
+                                            Color.Black.copy(alpha = 0.7f),
+                                            androidx.compose.foundation.shape.RoundedCornerShape(
+                                                    8.dp
+                                            )
+                                    )
+                                    .padding(16.dp)
             ) {
                 Text(
-                    text = "Volumen: ${(currentVolume * 100).roundToInt()}%",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    style = androidx.tv.material3.MaterialTheme.typography.titleMedium
+                        text = "Volumen: ${(currentVolume * 100).roundToInt()}%",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        style = androidx.tv.material3.MaterialTheme.typography.titleMedium
                 )
             }
         }
 
         AnimatedVisibility(
-            visible = isMenuVisible,
-            enter = slideInHorizontally(),
-            exit = slideOutHorizontally()
+                visible = isMenuVisible,
+                enter = slideInHorizontally(),
+                exit = slideOutHorizontally()
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(420.dp)
-                    .background(Brush.horizontalGradient(colors = listOf(Color.Black.copy(alpha = 0.98f), Color.Transparent)))
-                    .padding(20.dp)
+                    modifier =
+                            Modifier.fillMaxHeight()
+                                    .width(420.dp)
+                                    .background(
+                                            Brush.horizontalGradient(
+                                                    colors =
+                                                            listOf(
+                                                                    Color.Black.copy(alpha = 0.98f),
+                                                                    Color.Transparent
+                                                            )
+                                            )
+                                    )
+                                    .padding(20.dp)
             ) {
                 Crossfade(targetState = isSettingsOpen, label = "MenuSwitch") { showSettings ->
-
                     if (showSettings) {
                         SettingsView(
-                            onBack = { isSettingsOpen = false },
-                            onReset = onResetPlaylist,
-                            playlists = playlists,
-                            selectedPlaylist = selectedPlaylist,
-                            onPlaylistSelected = onPlaylistSelected,
-                            onDeletePlaylist = onDeletePlaylist,
-                            onAddPlaylist = onAddPlaylist,
-                            onEditPlaylist = onEditPlaylist
+                                onBack = { isSettingsOpen = false },
+                                onReset = onResetPlaylist,
+                                playlists = playlists,
+                                selectedPlaylist = selectedPlaylist,
+                                onPlaylistSelected = onPlaylistSelected,
+                                onDeletePlaylist = onDeletePlaylist,
+                                onAddPlaylist = onAddPlaylist,
+                                onEditPlaylist = onEditPlaylist
                         )
                     } else {
                         ChannelsView(
-                            channels = channels,
-                            currentChannel = currentChannel,
-                            listState = listState,
-                            onChannelSelected = { channel ->
-                                onChannelSelected(channel)
-                                isMenuVisible = false
-                                videoFocusRequester.requestFocus()
-                            },
-                            onOpenSettings = { isSettingsOpen = true },
-                            groups = groups,
-                            selectedGroup = selectedGroup,
-                            onGroupSelected = onGroupSelected,
-                            onCloseMenu = {
-                                isMenuVisible = false
-                                videoFocusRequester.requestFocus()
-                            }
+                                channels = channels,
+                                currentChannel = currentChannel,
+                                listState = listState,
+                                onChannelSelected = { channel ->
+                                    onChannelSelected(channel)
+                                    isMenuVisible = false
+                                    videoFocusRequester.requestFocus()
+                                },
+                                onOpenSettings = { isSettingsOpen = true },
+                                groups = groups,
+                                selectedGroup = selectedGroup,
+                                onGroupSelected = onGroupSelected,
+                                onCloseMenu = {
+                                    isMenuVisible = false
+                                    videoFocusRequester.requestFocus()
+                                }
                         )
                     }
                 }
@@ -328,15 +398,15 @@ fun PlayerScreen(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ChannelsView(
-    channels: List<Channel>,
-    currentChannel: Channel?,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    onChannelSelected: (Channel) -> Unit,
-    onOpenSettings: () -> Unit,
-    groups: List<String>,
-    selectedGroup: String,
-    onGroupSelected: (String) -> Unit,
-    onCloseMenu: () -> Unit
+        channels: List<Channel>,
+        currentChannel: Channel?,
+        listState: androidx.compose.foundation.lazy.LazyListState,
+        onChannelSelected: (Channel) -> Unit,
+        onOpenSettings: () -> Unit,
+        groups: List<String>,
+        selectedGroup: String,
+        onGroupSelected: (String) -> Unit,
+        onCloseMenu: () -> Unit
 ) {
     val headerFocus = remember { FocusRequester() }
 
@@ -356,19 +426,24 @@ fun ChannelsView(
         var isSettingsFocused by remember { mutableStateOf(false) }
 
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp)
-                .focusRequester(headerFocus)
-                .onFocusChanged { isSettingsFocused = it.isFocused }
-                .focusable()
-                .clickable { onOpenSettings() }
-                .background(
-                    color = if (isSettingsFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                )
-                .padding(8.dp)
+                verticalAlignment = Alignment.CenterVertically,
+                modifier =
+                        Modifier.fillMaxWidth()
+                                .padding(bottom = 10.dp)
+                                .focusRequester(headerFocus)
+                                .onFocusChanged { isSettingsFocused = it.isFocused }
+                                .focusable()
+                                .clickable { onOpenSettings() }
+                                .background(
+                                        color =
+                                                if (isSettingsFocused)
+                                                        Color.White.copy(alpha = 0.2f)
+                                                else Color.Transparent,
+                                        shape =
+                                                androidx.compose.foundation.shape
+                                                        .RoundedCornerShape(8.dp)
+                                )
+                                .padding(8.dp)
         ) {
             val contentColor = if (isSettingsFocused) Color.White else Color.LightGray
             Icon(Icons.Default.Settings, contentDescription = null, tint = contentColor)
@@ -377,47 +452,48 @@ fun ChannelsView(
         }
 
         LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            contentPadding = PaddingValues(horizontal = 4.dp)
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)
         ) {
             items(groups) { group ->
                 val isSelected = group == selectedGroup
                 var isFocused by remember { mutableStateOf(false) }
 
                 Text(
-                    text = group,
-                    color = if (isSelected || isFocused) Color.White else Color.Gray,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier
-                        .padding(end = 8.dp)
-                        .onFocusChanged { isFocused = it.isFocused }
-                        .focusable()
-                        .clickable { onGroupSelected(group) }
-                        .background(
-                            if (isSelected) Color(0xFF00BFA5).copy(alpha = 0.8f)
-                            else if (isFocused) Color.White.copy(alpha = 0.2f)
-                            else Color.Transparent,
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
-                        )
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        text = group,
+                        color = if (isSelected || isFocused) Color.White else Color.Gray,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        modifier =
+                                Modifier.padding(end = 8.dp)
+                                        .onFocusChanged { isFocused = it.isFocused }
+                                        .focusable()
+                                        .clickable { onGroupSelected(group) }
+                                        .background(
+                                                if (isSelected) Color(0xFF00BFA5).copy(alpha = 0.8f)
+                                                else if (isFocused) Color.White.copy(alpha = 0.2f)
+                                                else Color.Transparent,
+                                                shape =
+                                                        androidx.compose.foundation.shape
+                                                                .RoundedCornerShape(16.dp)
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
         }
 
         LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .onPreviewKeyEvent { keyEvent ->
-                    if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
-                        keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                        onCloseMenu()
-                        return@onPreviewKeyEvent true
-                    }
-                    false
-                }
+                state = listState,
+                modifier =
+                        Modifier.fillMaxSize().onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                                            keyEvent.nativeKeyEvent.keyCode ==
+                                                    KeyEvent.KEYCODE_DPAD_RIGHT
+                            ) {
+                                onCloseMenu()
+                                return@onPreviewKeyEvent true
+                            }
+                            false
+                        }
         ) {
             items(items = channels, key = { it.id }) { channel ->
                 val isSelected = channel == currentChannel
@@ -433,36 +509,42 @@ fun ChannelsView(
                 }
 
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .focusRequester(itemFocus)
-                        .onFocusChanged { isFocused = it.isFocused }
-                        .focusable()
-                        .clickable { onChannelSelected(channel) }
-                        .background(
-                            color = when {
-                                isSelected -> Color(0xFF00BFA5).copy(alpha = 0.9f)
-                                isFocused -> Color.White.copy(alpha = 0.2f)
-                                else -> Color.Transparent
-                            },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                        )
-                        .padding(10.dp)
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier =
+                                Modifier.fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .focusRequester(itemFocus)
+                                        .onFocusChanged { isFocused = it.isFocused }
+                                        .focusable()
+                                        .clickable { onChannelSelected(channel) }
+                                        .background(
+                                                color =
+                                                        when {
+                                                            isSelected ->
+                                                                    Color(0xFF00BFA5)
+                                                                            .copy(alpha = 0.9f)
+                                                            isFocused ->
+                                                                    Color.White.copy(alpha = 0.2f)
+                                                            else -> Color.Transparent
+                                                        },
+                                                shape =
+                                                        androidx.compose.foundation.shape
+                                                                .RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(10.dp)
                 ) {
                     AsyncImage(
-                        model = channel.logoUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(45.dp)
+                            model = channel.logoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(45.dp)
                     )
                     Spacer(modifier = Modifier.width(16.dp))
                     Text(
-                        text = channel.name,
-                        color = if (isSelected || isFocused) Color.White else Color.Gray,
-                        maxLines = 1,
-                        style = androidx.tv.material3.MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            text = channel.name,
+                            color = if (isSelected || isFocused) Color.White else Color.Gray,
+                            maxLines = 1,
+                            style = androidx.tv.material3.MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                     )
                 }
             }
@@ -473,33 +555,39 @@ fun ChannelsView(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsView(
-    onBack: () -> Unit,
-    onReset: () -> Unit,
-    playlists: List<com.example.myiptvplayer.data.Playlist>,
-    selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
-    onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
-    onAddPlaylist: () -> Unit,
-    onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit // Recibimos el callback
+        onBack: () -> Unit,
+        onReset: () -> Unit,
+        playlists: List<com.example.myiptvplayer.data.Playlist>,
+        selectedPlaylist: com.example.myiptvplayer.data.Playlist?,
+        onPlaylistSelected: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        onDeletePlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit,
+        onAddPlaylist: () -> Unit,
+        onEditPlaylist: (com.example.myiptvplayer.data.Playlist) -> Unit
 ) {
     val backButtonFocus = remember { FocusRequester() }
 
-    LaunchedEffect(Unit) {
-        backButtonFocus.requestFocus()
-    }
+    LaunchedEffect(Unit) { backButtonFocus.requestFocus() }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.Start
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            horizontalAlignment = Alignment.Start
     ) {
-        Text("Listas de Reproducción", style = androidx.tv.material3.MaterialTheme.typography.headlineMedium, color = Color.White)
+        Text(
+                "Listas de Reproducción",
+                style = androidx.tv.material3.MaterialTheme.typography.headlineMedium,
+                color = Color.White
+        )
 
         Spacer(modifier = Modifier.height(20.dp))
 
         Button(
-            onClick = onBack,
-            modifier = Modifier.focusRequester(backButtonFocus).fillMaxWidth(),
-            colors = ButtonDefaults.colors(containerColor = Color.DarkGray, contentColor = Color.White)
+                onClick = onBack,
+                modifier = Modifier.focusRequester(backButtonFocus).fillMaxWidth(),
+                colors =
+                        ButtonDefaults.colors(
+                                containerColor = Color.DarkGray,
+                                contentColor = Color.White
+                        )
         ) {
             Icon(Icons.Default.ArrowBack, contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))
@@ -509,12 +597,14 @@ fun SettingsView(
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
-            onClick = onAddPlaylist,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.colors(containerColor = Color(0xFF00BFA5), contentColor = Color.White)
-        ) {
-            Text("+ Agregar Lista")
-        }
+                onClick = onAddPlaylist,
+                modifier = Modifier.fillMaxWidth(),
+                colors =
+                        ButtonDefaults.colors(
+                                containerColor = Color(0xFF00BFA5),
+                                contentColor = Color.White
+                        )
+        ) { Text("+ Agregar Lista") }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -525,38 +615,45 @@ fun SettingsView(
                 var isItemFocused by remember { mutableStateOf(false) }
 
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                 ) {
                     // 1. ZONA DE TEXTO (Seleccionar)
                     Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .onFocusChanged { isItemFocused = it.isFocused }
-                            .clickable { onPlaylistSelected(playlist) }
-                            .focusable()
-                            .background(
-                                color = when {
-                                    isSelected -> Color(0xFF00BFA5).copy(alpha = 0.7f)
-                                    isItemFocused -> Color.White.copy(alpha = 0.2f)
-                                    else -> Color.Transparent
-                                },
-                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                            )
-                            .padding(12.dp)
+                            modifier =
+                                    Modifier.weight(1f)
+                                            .onFocusChanged { isItemFocused = it.isFocused }
+                                            .clickable { onPlaylistSelected(playlist) }
+                                            .focusable()
+                                            .background(
+                                                    color =
+                                                            when {
+                                                                isSelected ->
+                                                                        Color(0xFF00BFA5)
+                                                                                .copy(alpha = 0.7f)
+                                                                isItemFocused ->
+                                                                        Color.White.copy(
+                                                                                alpha = 0.2f
+                                                                        )
+                                                                else -> Color.Transparent
+                                                            },
+                                                    shape =
+                                                            androidx.compose.foundation.shape
+                                                                    .RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(12.dp)
                     ) {
                         Column {
                             Text(
-                                text = playlist.name,
-                                color = Color.White,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    text = playlist.name,
+                                    color = Color.White,
+                                    fontWeight =
+                                            if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                             Text(
-                                text = if (playlist.sourceType == "url") "URL" else "Archivo",
-                                color = Color.Gray,
-                                fontSize = 12.sp
+                                    text = if (playlist.sourceType == "url") "URL" else "Archivo",
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
                             )
                         }
                     }
@@ -565,36 +662,56 @@ fun SettingsView(
 
                     // 2. BOTÓN DE EDITAR (Amarillo)
                     Button(
-                        onClick = { onEditPlaylist(playlist) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = Color(0xFFFFD600), // Amarillo
-                            contentColor = Color.Black,
-                            focusedContainerColor = Color(0xFFFFEA00),
-                            focusedContentColor = Color.Black
-                        ),
-                        shape = ButtonDefaults.shape(shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
-                        modifier = Modifier.size(40.dp),
-                        contentPadding = PaddingValues(0.dp)
+                            onClick = { onEditPlaylist(playlist) },
+                            colors =
+                                    ButtonDefaults.colors(
+                                            containerColor = Color(0xFFFFD600), // Amarillo
+                                            contentColor = Color.Black,
+                                            focusedContainerColor = Color(0xFFFFEA00),
+                                            focusedContentColor = Color.Black
+                                    ),
+                            shape =
+                                    ButtonDefaults.shape(
+                                            shape =
+                                                    androidx.compose.foundation.shape
+                                                            .RoundedCornerShape(8.dp)
+                                    ),
+                            modifier = Modifier.size(40.dp),
+                            contentPadding = PaddingValues(0.dp)
                     ) {
-                        Icon(Icons.Default.Edit, contentDescription = "Editar", modifier = Modifier.size(20.dp))
+                        Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Editar",
+                                modifier = Modifier.size(20.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.width(8.dp))
 
                     // 3. BOTÓN DE BORRAR (Rojo)
                     Button(
-                        onClick = { onDeletePlaylist(playlist) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = Color(0xFFB00020), // Rojo
-                            contentColor = Color.White,
-                            focusedContainerColor = Color(0xFFFF1744),
-                            focusedContentColor = Color.White
-                        ),
-                        shape = ButtonDefaults.shape(shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
-                        modifier = Modifier.size(40.dp),
-                        contentPadding = PaddingValues(0.dp)
+                            onClick = { onDeletePlaylist(playlist) },
+                            colors =
+                                    ButtonDefaults.colors(
+                                            containerColor = Color(0xFFB00020), // Rojo
+                                            contentColor = Color.White,
+                                            focusedContainerColor = Color(0xFFFF1744),
+                                            focusedContentColor = Color.White
+                                    ),
+                            shape =
+                                    ButtonDefaults.shape(
+                                            shape =
+                                                    androidx.compose.foundation.shape
+                                                            .RoundedCornerShape(8.dp)
+                                    ),
+                            modifier = Modifier.size(40.dp),
+                            contentPadding = PaddingValues(0.dp)
                     ) {
-                        Icon(Icons.Default.DeleteForever, contentDescription = "Eliminar", modifier = Modifier.size(20.dp))
+                        Icon(
+                                Icons.Default.DeleteForever,
+                                contentDescription = "Eliminar",
+                                modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
@@ -603,9 +720,13 @@ fun SettingsView(
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
-            onClick = onReset,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.colors(containerColor = Color(0xFFB00020), contentColor = Color.White)
+                onClick = onReset,
+                modifier = Modifier.fillMaxWidth(),
+                colors =
+                        ButtonDefaults.colors(
+                                containerColor = Color(0xFFB00020),
+                                contentColor = Color.White
+                        )
         ) {
             Icon(Icons.Default.DeleteForever, contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))

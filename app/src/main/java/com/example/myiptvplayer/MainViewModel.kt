@@ -8,9 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.myiptvplayer.data.Channel
 import com.example.myiptvplayer.data.Playlist
 import com.example.myiptvplayer.data.PlaylistRepository
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -31,15 +29,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _groups = MutableStateFlow<List<String>>(emptyList())
     val groups = _groups.asStateFlow()
 
-    val channels = combine(_allChannels, _selectedGroup, _playlists) { all, group, playlists ->
-        val isPlaylistName = playlists.any { it.name == group }
+    val channels =
+            combine(_allChannels, _selectedGroup, _playlists) { all, group, playlists ->
+                val isPlaylistName = playlists.any { it.name == group }
 
-        when {
-            group.isEmpty() -> emptyList()
-            isPlaylistName -> all.filter { it.playlistName == group }
-            else -> all.filter { it.group == group }
-        }
-    }
+                when {
+                    group.isEmpty() -> emptyList()
+                    isPlaylistName -> all.filter { it.playlistName == group }
+                    else -> all.filter { it.group == group }
+                }
+            }
 
     private val _selectedChannel = MutableStateFlow<Channel?>(null)
     val selectedChannel = _selectedChannel.asStateFlow()
@@ -69,15 +68,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val totalChannels = mutableListOf<Channel>()
 
         playlists.forEach { playlist ->
-            val loaded = try {
-                if (playlist.sourceType == "url") {
-                    PlaylistRepository.loadFromUrl(playlist.sourceValue)
-                } else {
-                    PlaylistRepository.loadFromFile(context, Uri.parse(playlist.sourceValue))
-                }
-            } catch (e: Exception) {
-                emptyList()
-            }
+            val loaded =
+                    try {
+                        if (playlist.sourceType == "url") {
+                            PlaylistRepository.loadFromUrl(playlist.sourceValue)
+                        } else {
+                            PlaylistRepository.loadFromFile(
+                                    context,
+                                    Uri.parse(playlist.sourceValue)
+                            )
+                        }
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
             val taggedChannels = loaded.map { it.copy(playlistName = playlist.name) }
             totalChannels.addAll(taggedChannels)
         }
@@ -108,18 +111,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedGroup.value = group
     }
 
-    fun addPlaylistFromUrl(name: String, url: String, onSuccess: () -> Unit) {
+    fun addPlaylistFromUrl(
+            name: String,
+            url: String,
+            onSuccess: () -> Unit,
+            onError: (String) -> Unit
+    ) {
         viewModelScope.launch {
-            val list = PlaylistRepository.loadFromUrl(url)
-            if (list.isNotEmpty()) {
-                val newPlaylist = Playlist(
-                    name = name,
-                    sourceType = "url",
-                    sourceValue = url,
-                    order = _playlists.value.size
-                )
-                saveAndReloadAll(newPlaylist)
-                onSuccess()
+            try {
+                val list = PlaylistRepository.loadFromUrl(url)
+                if (list.isNotEmpty()) {
+                    val newPlaylist =
+                            Playlist(
+                                    name = name,
+                                    sourceType = "url",
+                                    sourceValue = url,
+                                    order = _playlists.value.size
+                            )
+                    saveAndReloadAll(newPlaylist)
+                    onSuccess()
+                } else {
+                    onError("La lista no contiene canales o tiene un formato inválido.")
+                }
+            } catch (e: Exception) {
+                onError("Error al cargar la lista: ${e.message}")
             }
         }
     }
@@ -128,8 +143,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (e: Exception) {
                 Log.e("MI_IPTV", "No se pudo persistir el permiso URI", e)
@@ -137,12 +152,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val list = PlaylistRepository.loadFromFile(context, uri)
             if (list.isNotEmpty()) {
-                val newPlaylist = Playlist(
-                    name = name,
-                    sourceType = "file",
-                    sourceValue = uri.toString(),
-                    order = _playlists.value.size
-                )
+                val newPlaylist =
+                        Playlist(
+                                name = name,
+                                sourceType = "file",
+                                sourceValue = uri.toString(),
+                                order = _playlists.value.size
+                        )
                 saveAndReloadAll(newPlaylist)
                 onSuccess()
             }
@@ -150,28 +166,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- NUEVA FUNCIÓN: ACTUALIZAR LISTA ---
-    fun updatePlaylist(originalPlaylist: Playlist, newName: String, newSourceValue: String, newSourceType: String, onSuccess: () -> Unit) {
+    fun updatePlaylist(
+            originalPlaylist: Playlist,
+            newName: String,
+            newSourceValue: String,
+            newSourceType: String,
+            onSuccess: () -> Unit,
+            onError: (String) -> Unit
+    ) {
         viewModelScope.launch {
-            // Intentamos cargar la lista para validar que funciona (opcional, pero recomendado)
-            val list = if (newSourceType == "url") {
-                PlaylistRepository.loadFromUrl(newSourceValue)
-            } else {
-                PlaylistRepository.loadFromFile(context, Uri.parse(newSourceValue))
-            }
-
-            // Actualizamos la lista en memoria manteniendo el ID y el orden original
-            val updatedList = _playlists.value.map {
-                if (it.id == originalPlaylist.id) {
-                    it.copy(name = newName, sourceType = newSourceType, sourceValue = newSourceValue)
+            try {
+                // Intentamos cargar la lista para validar que funciona
+                if (newSourceType == "url") {
+                    PlaylistRepository.loadFromUrl(newSourceValue)
                 } else {
-                    it
+                    PlaylistRepository.loadFromFile(context, Uri.parse(newSourceValue))
                 }
-            }
 
-            _playlists.value = updatedList
-            Prefs.savePlaylists(context, updatedList)
-            loadAllChannels(updatedList)
-            onSuccess()
+                // Actualizamos la lista en memoria manteniendo el ID y el orden original
+                val updatedList =
+                        _playlists.value.map {
+                            if (it.id == originalPlaylist.id) {
+                                it.copy(
+                                        name = newName,
+                                        sourceType = newSourceType,
+                                        sourceValue = newSourceValue
+                                )
+                            } else {
+                                it
+                            }
+                        }
+
+                _playlists.value = updatedList
+                Prefs.savePlaylists(context, updatedList)
+                loadAllChannels(updatedList)
+                onSuccess()
+            } catch (e: Exception) {
+                onError("Error al actualizar: ${e.message}")
+            }
         }
     }
 
@@ -184,15 +216,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectPlaylist(playlist: Playlist) {
-        viewModelScope.launch {
-            _selectedGroup.value = playlist.name
-        }
+        viewModelScope.launch { _selectedGroup.value = playlist.name }
     }
 
     fun deletePlaylist(playlist: Playlist) {
         viewModelScope.launch {
-            val updatedPlaylists = _playlists.value.filter { it.id != playlist.id }
-                .mapIndexed { index, pl -> pl.copy(order = index) }
+            val updatedPlaylists =
+                    _playlists.value.filter { it.id != playlist.id }.mapIndexed { index, pl ->
+                        pl.copy(order = index)
+                    }
 
             _playlists.value = updatedPlaylists
             Prefs.savePlaylists(context, updatedPlaylists)

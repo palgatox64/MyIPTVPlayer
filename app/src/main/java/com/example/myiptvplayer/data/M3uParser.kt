@@ -20,6 +20,9 @@ object M3uParser {
         var currentGroup: String? = null
         var currentId: String? = null
 
+        // Set para evitar IDs duplicados que rompen LazyColumn
+        val seenIds = HashSet<String>()
+
         reader.forEachLine { line ->
             val trimmed = line.trim()
 
@@ -33,19 +36,30 @@ object M3uParser {
                 currentId = regexId.find(trimmed)?.groupValues?.get(1) ?: ""
                 currentLogo = regexLogo.find(trimmed)?.groupValues?.get(1)
                 currentGroup = regexGroup.find(trimmed)?.groupValues?.get(1) ?: "General"
-
             } else if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
                 // 3. Si la línea no es comentario y no está vacía, ES LA URL
                 if (currentName != null) {
+                    // Lógica para garantizar ID único
+                    var finalId = currentId ?: "channel_${channels.size}"
+
+                    if (seenIds.contains(finalId)) {
+                        var counter = 1
+                        while (seenIds.contains("${finalId}_$counter")) {
+                            counter++
+                        }
+                        finalId = "${finalId}_$counter"
+                    }
+                    seenIds.add(finalId)
+
                     channels.add(
-                        Channel(
-                            id = currentId ?: "unknown",
-                            name = currentName!!,
-                            logoUrl = currentLogo,
-                            group = currentGroup,
-                            streamUrl = trimmed, // Aquí va tu URL larga de mdstrm.com
-                            playlistId = 0
-                        )
+                            Channel(
+                                    id = finalId,
+                                    name = currentName!!,
+                                    logoUrl = currentLogo,
+                                    group = currentGroup,
+                                    streamUrl = trimmed, // Aquí va tu URL larga de mdstrm.com
+                                    playlistId = 0
+                            )
                     )
                 }
                 // Limpiamos variables para el siguiente canal

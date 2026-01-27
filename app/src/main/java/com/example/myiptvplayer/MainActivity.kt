@@ -1,8 +1,5 @@
 package com.example.myiptvplayer
 
-import coil.Coil
-import coil.ImageLoader
-import okhttp3.OkHttpClient
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
@@ -11,21 +8,26 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -34,6 +36,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
+import coil.Coil
+import coil.ImageLoader
+import okhttp3.OkHttpClient
 import com.example.myiptvplayer.data.Playlist
 import com.example.myiptvplayer.ui.theme.MyIPTVPlayerTheme
 
@@ -100,25 +105,36 @@ fun AppNavigation() {
         composable("config") {
             ConfigScreen(
                 playlistToEdit = playlistToEdit,
-                onUrlSelected = { name, url ->
+                onUrlSelected = { name, url, onError ->
                     if (playlistToEdit != null) {
-                        viewModel.updatePlaylist(playlistToEdit!!, name, url, "url") {
-                            playlistToEdit = null
-                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
-                        }
+                        viewModel.updatePlaylist(playlistToEdit!!, name, url, "url",
+                            onSuccess = {
+                                playlistToEdit = null
+                                navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                            },
+                            onError = onError
+                        )
                     } else {
-                        viewModel.addPlaylistFromUrl(name, url) {
-                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
-                        }
+                        viewModel.addPlaylistFromUrl(name, url,
+                            onSuccess = {
+                                navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                            },
+                            onError = onError
+                        )
                     }
                 },
-                onFileSelected = { name, uri ->
+                onFileSelected = { name, uri, onError ->
                     if (playlistToEdit != null) {
-                        viewModel.updatePlaylist(playlistToEdit!!, name, uri.toString(), "file") {
-                            playlistToEdit = null
-                            navController.navigate("player") { popUpTo("config") { inclusive = true } }
-                        }
+                        viewModel.updatePlaylist(playlistToEdit!!, name, uri.toString(), "file",
+                            onSuccess = {
+                                playlistToEdit = null
+                                navController.navigate("player") { popUpTo("config") { inclusive = true } }
+                            },
+                            onError = onError
+                        )
                     } else {
+                        // Nota: addPlaylistFromFile aún no maneja errores explícitos igual que URL,
+                        // pero mantenemos la estructura para consistencia si se actualiza después.
                         viewModel.addPlaylistFromFile(name, uri) {
                             navController.navigate("player") { popUpTo("config") { inclusive = true } }
                         }
@@ -161,8 +177,8 @@ fun AppNavigation() {
 @Composable
 fun ConfigScreen(
     playlistToEdit: Playlist? = null,
-    onUrlSelected: (String, String) -> Unit,
-    onFileSelected: (String, Uri) -> Unit,
+    onUrlSelected: (String, String, (String) -> Unit) -> Unit,
+    onFileSelected: (String, Uri, (String) -> Unit) -> Unit,
     onCancel: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -172,18 +188,22 @@ fun ConfigScreen(
     var urlInput by remember { mutableStateOf(if (playlistToEdit?.sourceType == "url") playlistToEdit.sourceValue else "") }
     var isLoading by remember { mutableStateOf(false) }
 
-    // ESTADOS DE UX: Controlan si el teclado debe mostrarse
-    // false = Solo Lectura (Foco sin teclado)
-    // true = Edición (Foco con teclado)
+    // ESTADOS DE UX
     var isNameEditing by remember { mutableStateOf(false) }
     var isUrlEditing by remember { mutableStateOf(false) }
+
+    // Controladores de Foco
+    val urlFocusRequester = remember { FocusRequester() }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null && nameInput.isNotEmpty()) {
             isLoading = true
-            onFileSelected(nameInput, uri)
+            onFileSelected(nameInput, uri) { errorMsg ->
+                isLoading = false
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -209,11 +229,9 @@ fun ConfigScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged {
-                    // Si perdemos el foco, dejamos de editar (cierra teclado en la prox interaccion)
                     if (!it.isFocused) isNameEditing = false
                 }
                 .onKeyEvent { event ->
-                    // Si pulsamos ENTER o D-PAD CENTER, activamos la edición
                     if (!isNameEditing && (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                                 event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER)) {
                         if (event.nativeKeyEvent.action == KeyEvent.ACTION_UP) {
@@ -223,11 +241,20 @@ fun ConfigScreen(
                     }
                     false
                 },
-            readOnly = !isNameEditing, // TRUCO CLAVE: Si es true, no abre teclado
+            readOnly = !isNameEditing,
             singleLine = true,
+            // CONFIGURACIÓN TECLADO: SIGUIENTE
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(
+                onNext = {
+                    isNameEditing = false
+                    isUrlEditing = true // Activa edición para el siguiente campo automáticamente
+                    urlFocusRequester.requestFocus()
+                }
+            ),
             textStyle = TextStyle(color = Color.White),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = if (isNameEditing) Color.Cyan else Color.White, // Feedback visual
+                focusedBorderColor = if (isNameEditing) Color.Cyan else Color.White,
                 unfocusedBorderColor = Color.Gray,
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White
@@ -244,6 +271,7 @@ fun ConfigScreen(
                 label = { Text(if (playlistToEdit?.sourceType == "file") "Archivo seleccionado (solo lectura)" else "https://...") },
                 modifier = Modifier
                     .weight(1f)
+                    .focusRequester(urlFocusRequester) // Asigna el FocusRequester
                     .onFocusChanged { if (!it.isFocused) isUrlEditing = false }
                     .onKeyEvent { event ->
                         if (!isUrlEditing && (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
@@ -255,9 +283,22 @@ fun ConfigScreen(
                         }
                         false
                     },
-                readOnly = !isUrlEditing, // TRUCO CLAVE
+                readOnly = !isUrlEditing,
                 singleLine = true,
                 enabled = playlistToEdit?.sourceType != "file",
+                // CONFIGURACIÓN TECLADO: DONE (Confirmar)
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (urlInput.isNotEmpty() && nameInput.isNotEmpty()) {
+                            isLoading = true
+                            onUrlSelected(nameInput, urlInput) { errorMsg ->
+                                isLoading = false
+                                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                ),
                 textStyle = TextStyle(color = Color.White),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = if (isUrlEditing) Color.Cyan else Color.White,
@@ -273,7 +314,10 @@ fun ConfigScreen(
             Button(onClick = {
                 if (urlInput.isNotEmpty() && nameInput.isNotEmpty()) {
                     isLoading = true
-                    onUrlSelected(nameInput, urlInput)
+                    onUrlSelected(nameInput, urlInput) { errorMsg ->
+                        isLoading = false
+                        android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             }) { Text(buttonText) }
         }
